@@ -218,6 +218,13 @@ struct SettingsView: View {
 
                 sectionDivider
 
+                settingToggleRow(
+                    labels: model.uiLabels(for: \.isLaunchAtLoginEnabled),
+                    isOn: $model.isLaunchAtLoginEnabled
+                )
+
+                sectionDivider
+
                 VStack(alignment: .leading, spacing: 8) {
                     SettingText(labels: model.uiLabels(for: \.connectedTouchscreen))
 
@@ -290,11 +297,11 @@ struct SettingsView: View {
                 sliderRow(
                     labels: model.uiLabels(for: \.holdDuration),
                     value: $model.holdDuration,
-                    range: 0.0...0.16,
-                    step: 0.02,
+                    range: 0.1...1.0,
+                    step: 0.05,
                     currentText: { String(format: "Current %.2f s", $0) },
-                    minText: "0.00 s",
-                    maxText: "0.16 s"
+                    minText: "0.10 s",
+                    maxText: "1.00 s"
                 )
                 sectionDivider
                 sliderRow(

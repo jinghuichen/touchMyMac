@@ -9,6 +9,7 @@
 #include "TUCTouchInputManager-C.h"
 
 #include <mach/mach_port.h>
+#include <mach/mach_time.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/hid/IOHIDManager.h>
 
@@ -44,6 +45,22 @@ Boolean gTouchscreenUsesHybridMode = FALSE;
 
 
 CFMutableArrayRef gContactIdentifiers;
+
+
+// Pen (stylus) state. Pens report in their own Digitizer/Pen application collection.
+IOHIDElementRef gPenApplicationCollectionElement;
+
+typedef struct {
+    CGFloat x;
+    CGFloat y;
+    Boolean tip;
+    Boolean inRange;
+    Boolean eraser;
+    CGFloat pressure;
+    Boolean flushScheduled;
+} TUCPenState;
+
+static TUCPenState gPenState = { -1, -1, FALSE, FALSE, FALSE, 0, FALSE };
 
 
 #pragma mark General Debug Utilities
@@ -186,24 +203,226 @@ void StoreInputValue(IOHIDValueRef hidValue) {
  We need to inspect the HID tree as a whole once to see which elements are grouped into logical groups of touch data.
  Just pass in any element of the tree, the function will walk up the tree, search for the logical groups and rememeber them in the global variables.
  */
-void IdentifyElements(IOHIDElementRef anyElement, Boolean printTree) {
-    
-    IOHIDElementRef applicationCollection = anyElement;
-    IOHIDElementType type = kIOHIDElementTypeOutput;
-    
-    while (type != kIOHIDElementCollectionTypeApplication) {
-        IOHIDElementRef next = IOHIDElementGetParent(applicationCollection);
-        if (next) {
-            applicationCollection = next;
-            type = IOHIDElementGetType(applicationCollection);
-        } else {
+static Boolean IsTouchscreenApplicationCollection(IOHIDElementRef element) {
+    return element != NULL
+        && IOHIDElementGetType(element) == kIOHIDElementTypeCollection
+        && IOHIDElementGetCollectionType(element) == kIOHIDElementCollectionTypeApplication
+        && IOHIDElementGetUsagePage(element) == kHIDPage_Digitizer
+        && IOHIDElementGetUsage(element) == kHIDUsage_Dig_TouchScreen;
+}
+
+
+/**
+ Returns the application collection an element belongs to (or NULL).
+ */
+static IOHIDElementRef ApplicationCollectionOfElement(IOHIDElementRef element) {
+    IOHIDElementRef current = element;
+    while (current != NULL) {
+        if (IOHIDElementGetType(current) == kIOHIDElementTypeCollection
+            && IOHIDElementGetCollectionType(current) == kIOHIDElementCollectionTypeApplication) {
+            return current;
+        }
+        current = IOHIDElementGetParent(current);
+    }
+    return NULL;
+}
+
+
+/**
+ Composite touch devices (e.g. LG CreateBoard) expose mouse, pen, keyboard and touchscreen
+ application collections on the same HID interface. Find the touchscreen one explicitly,
+ instead of trusting whichever element happens to report first.
+ */
+static IOHIDElementRef CopyTouchscreenApplicationCollection(IOHIDDeviceRef device) {
+    CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device, NULL, kIOHIDOptionsTypeNone);
+    if (elements == NULL) {
+        return NULL;
+    }
+
+    IOHIDElementRef result = NULL;
+    for (CFIndex i = 0; i < CFArrayGetCount(elements); i++) {
+        IOHIDElementRef element = (IOHIDElementRef)CFArrayGetValueAtIndex(elements, i);
+        if (IsTouchscreenApplicationCollection(element)) {
+            result = (IOHIDElementRef)CFRetain(element);
             break;
         }
     }
+    CFRelease(elements);
+    return result;
+}
+
+
+static Boolean IsElementInTouchscreenCollection(IOHIDElementRef element) {
+    IOHIDElementRef application = ApplicationCollectionOfElement(element);
+    if (gApplicationCollectionElement != NULL) {
+        return application != NULL && CFEqual(application, gApplicationCollectionElement);
+    }
+    return IsTouchscreenApplicationCollection(application);
+}
+
+
+static IOHIDElementRef CopyPenApplicationCollection(IOHIDDeviceRef device) {
+    CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device, NULL, kIOHIDOptionsTypeNone);
+    if (elements == NULL) {
+        return NULL;
+    }
     
-    gApplicationCollectionElement = applicationCollection;
+    IOHIDElementRef result = NULL;
+    for (CFIndex i = 0; i < CFArrayGetCount(elements); i++) {
+        IOHIDElementRef element = (IOHIDElementRef)CFArrayGetValueAtIndex(elements, i);
+        if (IOHIDElementGetType(element) == kIOHIDElementTypeCollection
+            && IOHIDElementGetCollectionType(element) == kIOHIDElementCollectionTypeApplication
+            && IOHIDElementGetUsagePage(element) == kHIDPage_Digitizer
+            && IOHIDElementGetUsage(element) == kHIDUsage_Dig_Pen) {
+            result = (IOHIDElementRef)CFRetain(element);
+            break;
+        }
+    }
+    CFRelease(elements);
+    return result;
+}
+
+
+static Boolean IsElementInPenCollection(IOHIDElementRef element) {
+    if (gPenApplicationCollectionElement == NULL) {
+        return FALSE;
+    }
+    IOHIDElementRef application = ApplicationCollectionOfElement(element);
+    return application != NULL && CFEqual(application, gPenApplicationCollectionElement);
+}
+
+
+static CGFloat NormalizedValue(IOHIDElementRef element, CFIndex value) {
+    CGFloat min = (CGFloat)IOHIDElementGetLogicalMin(element);
+    CGFloat max = (CGFloat)IOHIDElementGetLogicalMax(element);
+    if (max <= min) {
+        return 0;
+    }
+    return ((CGFloat)value - min) / (max - min);
+}
+
+
+static void FlushPenState(void) {
+    gPenState.flushScheduled = FALSE;
+    static int sFlushLogged = 0;
+    if (sFlushLogged < 10) {
+        sFlushLogged++;
+        printf("[HID] pen flush x=%.3f y=%.3f tip=%d inRange=%d pressure=%.2f\n", gPenState.x, gPenState.y, gPenState.tip, gPenState.inRange, gPenState.pressure);
+    }
+    if (gPenState.x < 0 || gPenState.y < 0) {
+        return;
+    }
+    TouchInputManagerUpdatePen(gTouchManager, gPenState.x, gPenState.y, gPenState.tip, gPenState.inRange, gPenState.pressure, gPenState.eraser);
+}
+
+
+/**
+ Pen values of one report arrive back to back on the run loop. Store them and post a single
+ pen update once the whole report has been read.
+ */
+static void HandlePenValue(IOHIDValueRef hidValue) {
+    IOHIDElementRef element = IOHIDValueGetElement(hidValue);
+    CFIndex page = IOHIDElementGetUsagePage(element);
+    CFIndex usage = IOHIDElementGetUsage(element);
+    CFIndex value = IOHIDValueGetIntegerValue(hidValue);
     
+    if (page == kHIDPage_GenericDesktop && usage == kHIDUsage_GD_X) {
+        gPenState.x = NormalizedValue(element, value);
+    } else if (page == kHIDPage_GenericDesktop && usage == kHIDUsage_GD_Y) {
+        gPenState.y = NormalizedValue(element, value);
+    } else if (page == kHIDPage_Digitizer) {
+        switch (usage) {
+            case kHIDUsage_Dig_TipSwitch:   gPenState.tip = value != 0; break;
+            case kHIDUsage_Dig_InRange:     gPenState.inRange = value != 0; break;
+            case kHIDUsage_Dig_TipPressure: gPenState.pressure = NormalizedValue(element, value); break;
+            case kHIDUsage_Dig_Eraser:
+            case kHIDUsage_Dig_Invert:      gPenState.eraser = value != 0; break;
+            default: return;
+        }
+    } else {
+        return;
+    }
     
+    if (!gPenState.flushScheduled) {
+        gPenState.flushScheduled = TRUE;
+        CFRunLoopPerformBlock(gRunLoopRef, kCFRunLoopCommonModes, ^{
+            FlushPenState();
+        });
+        CFRunLoopWakeUp(gRunLoopRef);
+    }
+}
+
+
+/**
+ A collection holds one contact if it directly contains an X coordinate and a tip switch or contact identifier.
+ */
+static Boolean IsContactCollection(IOHIDElementRef collection) {
+    CFArrayRef children = IOHIDElementGetChildren(collection);
+    if (children == NULL) {
+        return FALSE;
+    }
+
+    Boolean hasX = FALSE;
+    Boolean hasContactInfo = FALSE;
+    for (CFIndex i = 0; i < CFArrayGetCount(children); i++) {
+        IOHIDElementRef child = (IOHIDElementRef)CFArrayGetValueAtIndex(children, i);
+        CFIndex page = IOHIDElementGetUsagePage(child);
+        CFIndex usage = IOHIDElementGetUsage(child);
+        if (page == kHIDPage_GenericDesktop && usage == kHIDUsage_GD_X) {
+            hasX = TRUE;
+        } else if (page == kHIDPage_Digitizer
+                   && (usage == kHIDUsage_Dig_TipSwitch || usage == kHIDUsage_Dig_ContactIdentifier)) {
+            hasContactInfo = TRUE;
+        }
+    }
+    return hasX && hasContactInfo;
+}
+
+
+static void CollectContactCollections(IOHIDElementRef collection, Boolean printTree) {
+    CFArrayRef children = IOHIDElementGetChildren(collection);
+    if (children == NULL) {
+        return;
+    }
+
+    for (CFIndex i = 0; i < CFArrayGetCount(children); i++) {
+        IOHIDElementRef element = (IOHIDElementRef)CFArrayGetValueAtIndex(children, i);
+        if (IOHIDElementGetType(element) != kIOHIDElementTypeCollection) {
+            continue;
+        }
+
+        if (IsContactCollection(element)) {
+            CFArrayAppendValue(gTouchCollectionElements, element);
+            if (printTree) {
+                printf(" > Contact collection (usage %#02lx)\n", (long)IOHIDElementGetUsage(element));
+            }
+        } else {
+            CollectContactCollections(element, printTree);
+        }
+    }
+}
+
+
+void IdentifyElements(IOHIDElementRef anyElement, Boolean printTree) {
+
+    IOHIDElementRef applicationCollection = gApplicationCollectionElement;
+    if (applicationCollection == NULL) {
+        applicationCollection = ApplicationCollectionOfElement(anyElement);
+        if (applicationCollection == NULL) {
+            return;
+        }
+        gApplicationCollectionElement = (IOHIDElementRef)CFRetain(applicationCollection);
+    }
+    IOHIDElementType type = IOHIDElementGetType(applicationCollection);
+
+    CFArrayRemoveAllValues(gTouchCollectionElements);
+    CollectContactCollections(applicationCollection, printTree);
+
+    if (printTree) {
+        printf("# touchscreen collection has %ld contact collections\n", CFArrayGetCount(gTouchCollectionElements));
+    }
+
+
     CFArrayRef children = IOHIDElementGetChildren(applicationCollection);
     CFIndex numChildren = CFArrayGetCount(children);
     
@@ -221,8 +440,6 @@ void IdentifyElements(IOHIDElementRef anyElement, Boolean printTree) {
         IOHIDElementCollectionType collectionType = IOHIDElementGetCollectionType(element);
         
         if (type == kIOHIDElementTypeCollection && collectionType == kIOHIDElementCollectionTypeLogical) {
-            CFArrayAppendValue(gTouchCollectionElements, element);
-            
             if (printTree) {
                 printf(" > Logical collection %ld\n", i);
                 CFArrayRef grandchildren = IOHIDElementGetChildren(element);
@@ -384,6 +601,11 @@ void DispatchTouchDataForCollection(IOHIDElementRef collection) {
             } // kHIDPage_Digitizer
         }
     }
+    static int sDispatchLogged = 0;
+    if (sDispatchLogged < 30) {
+        sDispatchLogged++;
+        printf("[HID] dispatch contact=%ld x=%.3f y=%.3f tip=%ld valid=%ld\n", (long)contactID, x, y, (long)tipSwitch, (long)isValid);
+    }
     TouchInputManagerUpdateTouchPosition(gTouchManager, contactID, x, y, (int)tipSwitch, (int)isValid);
     
 //    if (width != kCFNotFound && height != kCFNotFound && azimuth != kCFNotFound) {
@@ -475,14 +697,41 @@ static void Handle_InputValueCallback (
                 void *          inSender,       // the IOHIDManagerRef
                 IOHIDValueRef   inIOHIDValueRef // the new element value
 ) {
-    if(!gAreElementRefsSet) {
-        IOHIDElementRef e = IOHIDValueGetElement(inIOHIDValueRef);
-        IdentifyElements(e, TRUE);
-        gAreElementRefsSet = 1;
+    IOHIDElementRef elem = IOHIDValueGetElement(inIOHIDValueRef);
+
+    if (IsElementInPenCollection(elem)) {
+        static int sPenLogged = 0;
+        if (sPenLogged < 20) {
+            sPenLogged++;
+            printf("[HID] pen value: ");
+            PrintInput(inIOHIDValueRef);
+        }
+        HandlePenValue(inIOHIDValueRef);
+        return;
     }
     
-    IOHIDElementRef elem = IOHIDValueGetElement(inIOHIDValueRef);
-    
+    // Ignore the mouse/keyboard collections that share the interface with the touchscreen.
+    static int sIgnoredLogged = 0;
+    static int sTouchLogged = 0;
+    if (!IsElementInTouchscreenCollection(elem)) {
+        if (sIgnoredLogged < 10) {
+            sIgnoredLogged++;
+            printf("[HID] ignored non-touchscreen value: ");
+            PrintInput(inIOHIDValueRef);
+        }
+        return;
+    }
+    if (sTouchLogged < 20) {
+        sTouchLogged++;
+        printf("[HID] touchscreen value: ");
+        PrintInput(inIOHIDValueRef);
+    }
+
+    if(!gAreElementRefsSet) {
+        IdentifyElements(elem, TRUE);
+        gAreElementRefsSet = 1;
+    }
+
     if (gQueue == NULL) {
         // If we haven't set up the device queue yet, there's nowhere to route values.
         // The matching callback should create/schedule/start gQueue; this guard avoids a crash
@@ -505,6 +754,43 @@ static void Handle_InputValueCallback (
 
 
 
+// HID Digitizer usages for Windows-style touch panels (not defined in IOHIDUsageTables.h).
+#define kTUCHIDUsage_Dig_DeviceConfiguration 0x0E
+#define kTUCHIDUsage_Dig_DeviceMode          0x52
+#define kTUCDeviceModeMultiInput             2
+
+/**
+ Windows-certified touch panels (e.g. LG CreateBoard) boot in mouse mode and only send
+ multi-touch reports after the host writes Device Mode = Multi-Input to the
+ Device Configuration feature report. Windows does this automatically; macOS does not.
+ */
+static void EnableMultiTouchInputMode(IOHIDDeviceRef device) {
+    CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device, NULL, kIOHIDOptionsTypeNone);
+    if (elements == NULL) {
+        return;
+    }
+    
+    for (CFIndex i = 0; i < CFArrayGetCount(elements); i++) {
+        IOHIDElementRef element = (IOHIDElementRef)CFArrayGetValueAtIndex(elements, i);
+        if (IOHIDElementGetType(element) != kIOHIDElementTypeFeature
+            || IOHIDElementGetUsagePage(element) != kHIDPage_Digitizer
+            || IOHIDElementGetUsage(element) != kTUCHIDUsage_Dig_DeviceMode) {
+            continue;
+        }
+        
+        IOHIDValueRef value = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, element, mach_absolute_time(), kTUCDeviceModeMultiInput);
+        if (value == NULL) {
+            continue;
+        }
+        IOReturn result = IOHIDDeviceSetValue(device, element, value);
+        CFRelease(value);
+        printf("Set touch Device Mode=%d (report %u): 0x%x\n", kTUCDeviceModeMultiInput, (unsigned)IOHIDElementGetReportID(element), result);
+    }
+    CFRelease(elements);
+}
+
+
+
 // this will be called when the HID Manager matches a new (hot plugged) HID device
 static void Handle_DeviceMatchingCallback(
             void *          inContext,       // context from IOHIDManagerRegisterDeviceMatchingCallback
@@ -515,19 +801,38 @@ static void Handle_DeviceMatchingCallback(
     printf("%s(context: %p, result: %p, sender: %p, device: %p).\n",
         __PRETTY_FUNCTION__, inContext, (void *) inResult, inSender, (void*) inIOHIDDeviceRef);
    
-    gAreElementRefsSet = 0;
-
     // This interpreter currently supports a single active touchscreen queue.
     // If we already have one, ignore additional matching callbacks.
     if (gQueue != NULL) {
         return;
     }
-    
+
+    gAreElementRefsSet = 0;
+    if (gApplicationCollectionElement != NULL) {
+        CFRelease(gApplicationCollectionElement);
+    }
+    gApplicationCollectionElement = CopyTouchscreenApplicationCollection(inIOHIDDeviceRef);
+    if (gApplicationCollectionElement != NULL) {
+        IdentifyElements(gApplicationCollectionElement, TRUE);
+        gAreElementRefsSet = 1;
+    }
+    if (gPenApplicationCollectionElement != NULL) {
+        CFRelease(gPenApplicationCollectionElement);
+    }
+    gPenApplicationCollectionElement = CopyPenApplicationCollection(inIOHIDDeviceRef);
+    printf("Pen collection %s\n", gPenApplicationCollectionElement != NULL ? "found" : "not found");
+    EnableMultiTouchInputMode(inIOHIDDeviceRef);
+
     
     IOHIDQueueRef queue = IOHIDQueueCreate(kCFAllocatorDefault, inIOHIDDeviceRef, 1000, kNilOptions);
     
-    if (CFGetTypeID(queue) != IOHIDQueueGetTypeID()) {
-        // this is not a valid HID queue reference!
+    if (queue == NULL || CFGetTypeID(queue) != IOHIDQueueGetTypeID()) {
+        // Usually means the device could not be opened (e.g. Input Monitoring permission denied).
+        fprintf(stderr, "%s: could not create HID queue; check Input Monitoring permission.\n", __PRETTY_FUNCTION__);
+        if (queue != NULL) {
+            CFRelease(queue);
+        }
+        return;
     }
     
     IOHIDQueueRegisterValueAvailableCallback(queue, Handle_QueueValueAvailable, NULL);
@@ -565,6 +870,15 @@ static void Handle_RemovalCallback(
     if (gStoredInputValues != NULL) {
         CFDictionaryRemoveAllValues(gStoredInputValues);
     }
+    if (gApplicationCollectionElement != NULL) {
+        CFRelease(gApplicationCollectionElement);
+        gApplicationCollectionElement = NULL;
+    }
+    if (gPenApplicationCollectionElement != NULL) {
+        CFRelease(gPenApplicationCollectionElement);
+        gPenApplicationCollectionElement = NULL;
+    }
+    gAreElementRefsSet = 0;
     
     TouchInputManagerDidDisconnectTouchscreen(gTouchManager);
 }   // Handle_RemovalCallback
@@ -617,10 +931,20 @@ static CFMutableDictionaryRef CreateDeviceMatchingDictionary(UInt32 inUsagePage,
 
 void OpenHIDManager(void *delegate) {
     gTouchManager = delegate;
+    // Flush diagnostics line by line even when stdout is redirected to a file.
+    setvbuf(stdout, NULL, _IOLBF, 0);
     
     // If Open is called twice within one process, make sure we start clean.
     if (gHidManager != NULL) {
         CloseHIDManager();
+    }
+    
+    // Touch panels that also expose a keyboard collection (e.g. LG CreateBoard) can only be
+    // opened with Input Monitoring access. Ask for it so macOS lists/prompts for this build.
+    if (IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) != kIOHIDAccessTypeGranted) {
+        if (!IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)) {
+            fprintf(stderr, "%s: Input Monitoring access not granted. Enable TouchMyMac in System Settings > Privacy & Security > Input Monitoring.\n", __PRETTY_FUNCTION__);
+        }
     }
     
     gHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
@@ -721,6 +1045,14 @@ void CloseHIDManager(void) {
         gStoredInputValues = NULL;
     }
 
+    if (gApplicationCollectionElement != NULL) {
+        CFRelease(gApplicationCollectionElement);
+        gApplicationCollectionElement = NULL;
+    }
+    if (gPenApplicationCollectionElement != NULL) {
+        CFRelease(gPenApplicationCollectionElement);
+        gPenApplicationCollectionElement = NULL;
+    }
     gAreElementRefsSet = 0;
     gContactCount = 1;
     gHybridOffset = 0;

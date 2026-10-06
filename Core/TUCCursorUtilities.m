@@ -16,6 +16,9 @@
 @property CGPoint locationOfLastClick;
 
 @property BOOL isLeftMouseDown;
+/// While YES, a pen stroke owns the left button; finger-driven mouse output is dropped so it can't end the stroke.
+@property BOOL penStrokeActive;
+@property CGPoint penLastLocation;
 
 @property CGPoint momentumScrollVelocity;
 @property CFTimeInterval momentumLastTickTime;
@@ -286,6 +289,10 @@ static const useconds_t kShortcutSequenceStepDelayMicroseconds = 30000;
 
 
 - (void)moveCursorTo:(CGPoint)aLocation {
+    if (self.penStrokeActive) {
+        return;
+    }
+
     [self cancelMomentumScroll];
     [self stopDraggingCursor];
     
@@ -326,6 +333,10 @@ static inline CFTimeInterval TUCNowSeconds(void) {
  integrated double click support: needs checks time between clicks and spatial distance
  */
 - (void)performClickAt:(CGPoint)aLocation {
+    if (self.penStrokeActive) {
+        return;
+    }
+
     [self updateCursorClickCountWithLocation:aLocation];
     
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, aLocation, kCGMouseButtonLeft);
@@ -366,6 +377,10 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 
 
 - (void)performSecondaryClickAt:(CGPoint)aLocation {
+    if (self.penStrokeActive) {
+        return;
+    }
+
     CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDown, aLocation, kCGMouseButtonRight);
     CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
     CGEventPost(kCGHIDEventTap, event);
@@ -377,6 +392,10 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 
 
 - (void)dragCursorTo:(CGPoint)aLocation phase:(NSTouchPhase)phase  {
+    if (self.penStrokeActive) {
+        return;
+    }
+
     if (phase == NSTouchPhaseEnded || phase == NSTouchPhaseCancelled) {
         [self stopDraggingCursor];
         return;
@@ -402,7 +421,62 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 }
 
 
+#pragma mark - Pen
+
+static const double kTUCPenConstantPressure = 1.0;
+
+- (void)postPenEvent:(CGEventType)type at:(CGPoint)aLocation pressure:(CGFloat)pressure {
+    CGEventRef event = CGEventCreateMouseEvent(NULL, type, aLocation, kCGMouseButtonLeft);
+    if (event == NULL) {
+        return;
+    }
+    if (type != kCGEventMouseMoved) {
+        CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
+    }
+    // Plain mouse events: apps such as Notability drop drags tagged as tablet input when no
+    // tablet proximity events precede them. Deltas let apps that track relative motion follow along.
+    if (type == kCGEventLeftMouseDragged) {
+        CGEventSetIntegerValueField(event, kCGMouseEventDeltaX, (int64_t)(aLocation.x - self.penLastLocation.x));
+        CGEventSetIntegerValueField(event, kCGMouseEventDeltaY, (int64_t)(aLocation.y - self.penLastLocation.y));
+    }
+    // Constant pressure: full (1.0) while the tip is down, 0 otherwise. Pens on this panel report
+    // no pressure, and apps like Notability treat near-zero pressure on a drag as not touching.
+    BOOL buttonDown = (type == kCGEventLeftMouseDown || type == kCGEventLeftMouseDragged);
+    CGEventSetDoubleValueField(event, kCGMouseEventPressure, buttonDown ? kTUCPenConstantPressure : 0.0);
+    CGEventPost(kCGHIDEventTap, event);
+    self.penLastLocation = aLocation;
+    CFRelease(event);
+}
+
+- (void)penHoverAt:(CGPoint)aLocation {
+    [self postPenEvent:kCGEventMouseMoved at:aLocation pressure:0];
+}
+
+- (void)penDownAt:(CGPoint)aLocation pressure:(CGFloat)pressure {
+    [self cancelMomentumScroll];
+    [self stopDraggingCursor];
+    [self postPenEvent:kCGEventMouseMoved at:aLocation pressure:0];
+    [self postPenEvent:kCGEventLeftMouseDown at:aLocation pressure:pressure];
+    self.isLeftMouseDown = YES;
+    self.penStrokeActive = YES;
+}
+
+- (void)penDragTo:(CGPoint)aLocation pressure:(CGFloat)pressure {
+    [self postPenEvent:kCGEventLeftMouseDragged at:aLocation pressure:pressure];
+}
+
+- (void)penUpAt:(CGPoint)aLocation {
+    [self postPenEvent:kCGEventLeftMouseUp at:aLocation pressure:0];
+    self.isLeftMouseDown = NO;
+    self.penStrokeActive = NO;
+}
+
+
 - (void)stopDraggingCursor {
+    if (self.penStrokeActive) {
+        return;
+    }
+
     if (self.isLeftMouseDown) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, [self currentCursorLocation], kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
@@ -416,6 +490,10 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 
 
 - (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase {
+    if (self.penStrokeActive) {
+        return;
+    }
+
     [self stopDraggingCursor];
 
     CFTimeInterval now = TUCNowSeconds();
@@ -559,6 +637,10 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 
 
 - (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2 {
+    if (self.penStrokeActive) {
+        return;
+    }
+
     [self stopDraggingCursor];
     
     NSTouchPhase phase = NSTouchPhaseMoved;
@@ -672,6 +754,44 @@ static inline CFTimeInterval TUCNowSeconds(void) {
         [self pressAndReleaseShortcutChordWithDescriptors:descriptors];
         usleep(kShortcutSequenceStepDelayMicroseconds);
     }
+}
+
+- (void)switchSpaceToRight:(BOOL)toRight {
+    [self cancelMomentumScroll];
+    [self stopDraggingCursor];
+    [self stopMagnifying];
+    
+    CGKeyCode arrow = toRight ? kVK_RightArrow : kVK_LeftArrow;
+    // A real arrow key always carries the Fn and NumericPad flags. The system "Move left/right a
+    // space" hotkey is registered as Control+Fn+Arrow, so a Control-only arrow event is ignored.
+    CGEventFlags arrowFlags = kCGEventFlagMaskControl | kCGEventFlagMaskSecondaryFn | kCGEventFlagMaskNumericPad;
+    
+    CGEventRef controlDown = CGEventCreateKeyboardEvent(NULL, kVK_Control, true);
+    CGEventRef arrowDown = CGEventCreateKeyboardEvent(NULL, arrow, true);
+    CGEventRef arrowUp = CGEventCreateKeyboardEvent(NULL, arrow, false);
+    CGEventRef controlUp = CGEventCreateKeyboardEvent(NULL, kVK_Control, false);
+    if (controlDown == NULL || arrowDown == NULL || arrowUp == NULL || controlUp == NULL) {
+        if (controlDown) CFRelease(controlDown);
+        if (arrowDown) CFRelease(arrowDown);
+        if (arrowUp) CFRelease(arrowUp);
+        if (controlUp) CFRelease(controlUp);
+        return;
+    }
+    
+    CGEventSetFlags(controlDown, kCGEventFlagMaskControl);
+    CGEventSetFlags(arrowDown, arrowFlags);
+    CGEventSetFlags(arrowUp, arrowFlags);
+    CGEventSetFlags(controlUp, 0);
+    
+    CGEventPost(kCGHIDEventTap, controlDown);
+    CGEventPost(kCGHIDEventTap, arrowDown);
+    CGEventPost(kCGHIDEventTap, arrowUp);
+    CGEventPost(kCGHIDEventTap, controlUp);
+    
+    CFRelease(controlDown);
+    CFRelease(arrowDown);
+    CFRelease(arrowUp);
+    CFRelease(controlUp);
 }
 
 - (void)performMissionControl {

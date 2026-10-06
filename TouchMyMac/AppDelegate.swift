@@ -129,6 +129,8 @@ class SettingsWindow: NSWindow {
                                     screen: nil)
         
         window.title = "TouchMyMac Settings"
+        // The app delegate keeps a strong reference and reopens this window; AppKit must not free it on close.
+        window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
         window.model = model
         window.level = .popUpMenu
@@ -142,7 +144,9 @@ class SettingsWindow: NSWindow {
     
     override func close() {
         self.model?.savePreferences()
-        NSApp.stopModal()
+        if NSApp.modalWindow != nil {
+            NSApp.stopModal()
+        }
         super.close()
     }
     

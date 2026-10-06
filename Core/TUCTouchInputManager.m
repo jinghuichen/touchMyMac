@@ -57,6 +57,18 @@
 
 @property (strong) NSTimer *touchInactivityTimer;
 
+// Pen state and palm rejection: finger contacts are ignored while a pen is near the screen.
+@property BOOL penIsDown;
+@property BOOL penInRange;
+@property (strong, nullable) NSDate *penLastActiveDate;
+@property (strong) NSMutableSet<NSNumber *> *penSuppressedContactIDs;
+@property (strong, nullable) NSTimer *penUpDebounceTimer;
+@property CGPoint penLastLocation;
+@property NSInteger penStrokeDragCount;
+@property (nonatomic) CFMachPortRef nativePenEventTap;
+@property (nonatomic) CFRunLoopSourceRef nativePenEventTapSource;
+@property NSInteger nativePenEventsDropped;
+
 @end
 
 
@@ -74,6 +86,8 @@ static const CGFloat kScrollReanchorDistanceMM = 25.0f;
 static const NSTimeInterval kTouchInactivityTimeout = 0.12;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxHorizontalTravelMM = 18.0f;
+static const CGFloat kThreeFingerSpaceSwipeTriggerTravelMM = 30.0f;
+static const CGFloat kThreeFingerSpaceSwipeMaxVerticalTravelMM = 20.0f;
 static const CGFloat kFourFingerSwipeTriggerTravelMM = 20.0f;
 static const CGFloat kFourFingerSwipeMaxVerticalTravelMM = 18.0f;
 static const CGFloat kFourFingerSwipeMaxHorizontalTravelMM = 18.0f;
@@ -91,6 +105,7 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 //        [NSThread setThreadPriority:1];
         OpenHIDManager((__bridge void *)(weakSelf));
 //    }];
+    [self installNativePenEventFilter];
 
     if (self.touchInactivityTimer == nil) {
         self.touchInactivityTimer = [NSTimer timerWithTimeInterval:0.03
@@ -104,6 +119,7 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 }
 
 - (void)stop {
+    [self removeNativePenEventFilter];
     CloseHIDManager();
     if (self.touchInactivityTimer != nil) {
         [self.touchInactivityTimer invalidate];
@@ -351,6 +367,20 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
         return;
     }
     
+    // Palm rejection: contacts that touched down while a pen was in use stay ignored until lifted.
+    NSNumber *contactKey = @(contactID);
+    if ([self.penSuppressedContactIDs containsObject:contactKey]) {
+        if (!isOnSurface) {
+            [self.penSuppressedContactIDs removeObject:contactKey];
+        }
+        return;
+    }
+    if ([self isPenActive] && isOnSurface) {
+        NSLog(@"[Pen] ignoring finger contact %ld while pen is active", (long)contactID);
+        [self.penSuppressedContactIDs addObject:contactKey];
+        return;
+    }
+    
     CGPoint point = [self convertDigitizerPointToRelativeScreenPoint:digitizerPoint];
     
     BOOL isNewTouch = NO;
@@ -430,6 +460,11 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 - (void)processTouchesForCursorInput {
     
     if(!self.cursorTouch || !self.postMouseEvents) {
+        return;
+    }
+    
+    // Never let finger input (e.g. a resting palm) interfere with a pen stroke.
+    if ([self isPenActive]) {
         return;
     }
     
@@ -575,6 +610,7 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
             self.threeFingerSwipeTracking = YES;
             self.threeFingerSwipeTriggered = NO;
             self.threeFingerSwipeStartCentroid = [self centroidForTouches:touches];
+            NSLog(@"[3F] tracking started (screen %.0f x %.0f mm)", [self touchscreen].physicalSize.width, [self touchscreen].physicalSize.height);
         }
 
         CGPoint centroid = [self centroidForTouches:touches];
@@ -602,12 +638,34 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
             self.threeFingerSwipeTriggered = YES;
             self.debugThreeFingerTriggered = YES;
         }
+        
+        // Three-finger horizontal drag switches between Spaces / full-screen apps, like a trackpad.
+        CGFloat signedHorizontalTravelMM = (centroid.x - self.threeFingerSwipeStartCentroid.x) * physicalSize.width;
+        BOOL shouldSwitchSpace = !self.threeFingerSwipeTriggered
+            && fabs(signedHorizontalTravelMM) >= kThreeFingerSpaceSwipeTriggerTravelMM
+            && fabs(verticalTravelMM) <= kThreeFingerSpaceSwipeMaxVerticalTravelMM;
+        static NSInteger sThreeFingerLogCounter = 0;
+        if (!self.threeFingerSwipeTriggered && (sThreeFingerLogCounter++ % 10) == 0) {
+            NSLog(@"[3F] horizontal %.1f mm, vertical %.1f mm", signedHorizontalTravelMM, verticalTravelMM);
+        }
+        if (shouldSwitchSpace) {
+            NSLog(@"[3F] switching space %@", signedHorizontalTravelMM < 0 ? @"right" : @"left");
+            self.suppressEndedPrimaryTouchAction = YES;
+            self.threeFingerSwipeTriggered = YES;
+            self.debugThreeFingerTriggered = YES;
+            // Fingers moving left reveal the space to the right (natural direction).
+            [[TUCCursorUtilities sharedInstance] switchSpaceToRight:(signedHorizontalTravelMM < 0)];
+        }
 
         return;
     }
 
     if (phase == NSTouchPhaseBegan) {
         [self performMouseEventForGesture:TUCCursorGestureTouchDown];
+        return;
+    }
+    
+    if ([self updateCursorTouchHoldStateWithActiveTouchCount:touches.count]) {
         return;
     }
     
@@ -731,6 +789,35 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
         }
         [self performMouseEventForGesture:TUCCursorGestureDrag];
     }
+}
+
+
+/**
+ A hold is a single finger that stays within the tap slop of its touch-down point for `holdDuration`.
+ Measuring against the touch-down point (instead of frame-to-frame stillness) keeps holds working on
+ large or noisy panels where a resting finger jitters slightly every report.
+ Once recognized, the left button goes down right away so the next movement drags (e.g. a window title bar).
+ Returns YES if the hold was recognized in this frame.
+ */
+- (BOOL)updateCursorTouchHoldStateWithActiveTouchCount:(NSUInteger)activeTouchCount {
+    if (self.cursorTouchDidHold
+        || !self.cursorTouchQualifiedForTap
+        || self.cursorTouchBeganDate == nil
+        || activeTouchCount > 1
+        || self.identifiedMultitouchGesture != _TUCCursorGestureNone
+        || self.cursorTouch.phase == NSTouchPhaseEnded
+        || self.cursorTouch.phase == NSTouchPhaseCancelled) {
+        return NO;
+    }
+    
+    NSTimeInterval touchDuration = [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate];
+    if (touchDuration < self.holdDuration || [self cursorTouchDistanceFromStartMM] > kTapCancelDistanceMM) {
+        return NO;
+    }
+    
+    self.cursorTouchDidHold = YES;
+    [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
+    return YES;
 }
 
 
@@ -1153,6 +1240,7 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
     if(self = [super init]) {
         self.touchSet = [NSMutableSet new];
         self.postMouseEvents = YES;
+        self.penSuppressedContactIDs = [NSMutableSet set];
         
         self.cursorTouchQualifiedForTap = NO;
         self.cursorTouchStationarySinceDate = nil;
@@ -1161,7 +1249,7 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
         self.identifiedMultitouchGesture = _TUCCursorGestureNone;
         
         self.doubleClickTolerance = 5;
-        self.holdDuration = 0.08;
+        self.holdDuration = 0.25;
         self.errorResistance = 0;
         
         self.ignoreOriginTouches = NO;
@@ -1210,6 +1298,174 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
     return str;
 }
 
+#pragma mark - Pen
+
+static const NSTimeInterval kPenPalmRejectionGracePeriod = 0.5;
+static const NSTimeInterval kPenUpDebounceInterval = 0.06;
+
+#pragma mark Native pen event filter
+
+/**
+ macOS also turns this panel's pen reports into its own tablet-tagged cursor events (hardware source,
+ no button held). Interleaved with our button-down drags they end the stroke in apps like Notability,
+ which then draw only dots. While a pen stroke is active, drop those hardware tablet events.
+ */
+static CGEventRef TUCNativePenEventFilterCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *userInfo) {
+    TUCTouchInputManager *manager = (__bridge TUCTouchInputManager *)userInfo;
+    
+    if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
+        if (manager.nativePenEventTap != NULL) {
+            CGEventTapEnable(manager.nativePenEventTap, true);
+        }
+        return event;
+    }
+    
+    // Only hardware events (our own carry this process's PID), and only tablet-tagged ones.
+    if (CGEventGetIntegerValueField(event, kCGEventSourceUnixProcessID) != 0) {
+        return event;
+    }
+    int64_t subtype = CGEventGetIntegerValueField(event, kCGMouseEventSubtype);
+    BOOL isTabletEvent = type == kCGEventTabletPointer
+        || type == kCGEventTabletProximity
+        || subtype == kCGEventMouseSubtypeTabletPoint
+        || subtype == kCGEventMouseSubtypeTabletProximity;
+    if (!isTabletEvent || ![manager isPenActive]) {
+        return event;
+    }
+    
+    manager.nativePenEventsDropped++;
+    return NULL;
+}
+
+- (void)installNativePenEventFilter {
+    if (self.nativePenEventTap != NULL) {
+        return;
+    }
+    CGEventMask mask = CGEventMaskBit(kCGEventMouseMoved)
+        | CGEventMaskBit(kCGEventLeftMouseDown)
+        | CGEventMaskBit(kCGEventLeftMouseUp)
+        | CGEventMaskBit(kCGEventLeftMouseDragged)
+        | CGEventMaskBit(kCGEventTabletPointer)
+        | CGEventMaskBit(kCGEventTabletProximity);
+    CFMachPortRef tap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionDefault,
+                                         mask, TUCNativePenEventFilterCallback, (__bridge void *)self);
+    if (tap == NULL) {
+        NSLog(@"[Pen] could not install native pen event filter (Accessibility permission?)");
+        return;
+    }
+    CFRunLoopSourceRef source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0);
+    CFRunLoopAddSource(CFRunLoopGetMain(), source, kCFRunLoopCommonModes);
+    CGEventTapEnable(tap, true);
+    self.nativePenEventTap = tap;
+    self.nativePenEventTapSource = source;
+    NSLog(@"[Pen] native pen event filter installed");
+}
+
+- (void)removeNativePenEventFilter {
+    if (self.nativePenEventTap == NULL) {
+        return;
+    }
+    CGEventTapEnable(self.nativePenEventTap, false);
+    if (self.nativePenEventTapSource != NULL) {
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), self.nativePenEventTapSource, kCFRunLoopCommonModes);
+        CFRelease(self.nativePenEventTapSource);
+        self.nativePenEventTapSource = NULL;
+    }
+    CFMachPortInvalidate(self.nativePenEventTap);
+    CFRelease(self.nativePenEventTap);
+    self.nativePenEventTap = NULL;
+}
+
+
+- (void)finishPenStroke {
+    self.penUpDebounceTimer = nil;
+    if (!self.penIsDown) {
+        return;
+    }
+    NSLog(@"[Pen] up at (%.0f, %.0f) after %ld drag events, %ld native events filtered so far", self.penLastLocation.x, self.penLastLocation.y, (long)self.penStrokeDragCount, (long)self.nativePenEventsDropped);
+    [[TUCCursorUtilities sharedInstance] penUpAt:self.penLastLocation];
+    self.penIsDown = NO;
+    self.penLastActiveDate = [NSDate date];
+}
+
+- (BOOL)isPenActive {
+    if (self.penIsDown) {
+        return YES;
+    }
+    return self.penLastActiveDate != nil
+        && [[NSDate date] timeIntervalSinceDate:self.penLastActiveDate] < kPenPalmRejectionGracePeriod;
+}
+
+/**
+ Ends any finger gesture in progress and ignores those fingers until they lift,
+ so a resting palm neither scrolls nor clicks while drawing.
+ */
+- (void)suppressFingerTouchesForPen {
+    for (TUCTouch *touch in [self.touchSet allObjects]) {
+        if (touch.isActive) {
+            [self.penSuppressedContactIDs addObject:@(touch.contactID)];
+        }
+    }
+    [self stopCurrentGesture];
+    self.cursorTouch = nil;
+    [[TUCCursorUtilities sharedInstance] cancelMomentumScroll];
+}
+
+- (void)updatePenAtDigitizerPoint:(CGPoint)digitizerPoint tip:(BOOL)tip inRange:(BOOL)inRange pressure:(CGFloat)pressure eraser:(BOOL)eraser {
+    if (!self.postMouseEvents) {
+        return;
+    }
+    
+    if (inRange != self.penInRange) {
+        NSLog(@"[Pen] in range %d (tip %d)", inRange, tip);
+    }
+    
+    BOOL wasActive = [self isPenActive];
+    // Only pen *contact* counts as pen use. In Range alone is not reliable: pens resting in the
+    // board's tray can report In Range indefinitely, which would lock out all finger input.
+    if (tip && !wasActive) {
+        [self suppressFingerTouchesForPen];
+    }
+    
+    CGPoint relative = [self convertDigitizerPointToRelativeScreenPoint:digitizerPoint];
+    CGPoint location = [self convertScreenPointRelativeToAbsolute:relative];
+    TUCCursorUtilities *utils = [TUCCursorUtilities sharedInstance];
+    
+    if (tip) {
+        // The tip came back before the lift was confirmed: keep drawing the same stroke.
+        [self.penUpDebounceTimer invalidate];
+        self.penUpDebounceTimer = nil;
+    }
+    
+    if (tip && !self.penIsDown) {
+        NSLog(@"[Pen] down at (%.0f, %.0f)", location.x, location.y);
+        self.penStrokeDragCount = 0;
+        [utils penDownAt:location pressure:pressure];
+        self.penIsDown = YES;
+    } else if (tip) {
+        [utils penDragTo:location pressure:pressure];
+        self.penStrokeDragCount++;
+    } else if (self.penIsDown) {
+        // Some panels drop the tip switch for a report or two mid-stroke. Only end the stroke
+        // if the tip stays up briefly, otherwise one line breaks into many short pieces.
+        if (self.penUpDebounceTimer == nil) {
+            self.penUpDebounceTimer = [NSTimer scheduledTimerWithTimeInterval:kPenUpDebounceInterval
+                                                                       target:self
+                                                                     selector:@selector(finishPenStroke)
+                                                                     userInfo:nil
+                                                                      repeats:NO];
+        }
+    }
+    
+    self.penLastLocation = location;
+    
+    self.penInRange = inRange;
+    if (tip) {
+        self.penLastActiveDate = [NSDate date];
+    }
+}
+
+
 - (void)triggerSystemAccessibilityAccessAlert {
     CGPoint loc = [[TUCCursorUtilities sharedInstance] currentCursorLocation];
     [[TUCCursorUtilities sharedInstance] moveCursorTo:loc];
@@ -1231,6 +1487,10 @@ void TouchInputManagerUpdateTouchPosition(void *self, CFIndex contactID, CGFloat
 void TouchInputManagerUpdateTouchSize(void *self, CFIndex contactID, CGFloat width, CGFloat height, CGFloat azimuth) {
     CGSize size = CGSizeMake(width, height);
     [(__bridge id)self updateTouch:(NSInteger)contactID withSize:size azimuth:azimuth];
+}
+
+void TouchInputManagerUpdatePen(void *self, CGFloat x, CGFloat y, Boolean tip, Boolean inRange, CGFloat pressure, Boolean eraser) {
+    [(__bridge id)self updatePenAtDigitizerPoint:CGPointMake(x, y) tip:tip inRange:inRange pressure:pressure eraser:eraser];
 }
 
 void TouchInputManagerDidProcessReport(void *self) {

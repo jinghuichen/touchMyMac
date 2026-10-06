@@ -7,6 +7,7 @@
 
 import AppKit
 import Combine
+import ServiceManagement
 import TouchUpCore
 
 struct DiagnosticsEvent: Identifiable {
@@ -41,7 +42,7 @@ class TouchMyMac: NSObject, ObservableObject {
     
     
     
-    @Published var holdDuration: TimeInterval = 0.1
+    @Published var holdDuration: TimeInterval = 0.25
     @Published var doubleClickDistance: CGFloat = 3 //mm
     @Published var errorResistance: NSInteger = 0 // num of Reports to wait before cancelling a touch
     @Published var ignoreOriginTouches: Bool = false
@@ -55,6 +56,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var fiveFingerHoldShortcutSpec: String = "fn"
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
 
+    @Published var isLaunchAtLoginEnabled = true
     @Published var isScrollInertiaEnabled = true
     @Published var scrollSpeedMultiplier: CGFloat = 1.4
     @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.95
@@ -213,7 +215,10 @@ class TouchMyMac: NSObject, ObservableObject {
     
     func grantAccessibilityAccess() {
         self.touchManager.triggerSystemAccessibilityAccessAlert()
-        (NSApp.delegate as? AppDelegate)?.settingsWindow.close()
+        // Close on the next run loop pass so we don't tear down the window inside its own button action.
+        DispatchQueue.main.async {
+            (NSApp.delegate as? AppDelegate)?.settingsWindow.close()
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             self.checkAccessibilityAccessGranted()
         }
@@ -410,6 +415,7 @@ class TouchMyMac: NSObject, ObservableObject {
         }
         
         if shouldLog {
+            print("[Gesture] \(gestureName) -> \(actionName)")
             recentGestureEvents.insert(DiagnosticsEvent(message: "\(gestureName) -> \(actionName)"), at: 0)
             if recentGestureEvents.count > 24 {
                 recentGestureEvents.removeLast(recentGestureEvents.count - 24)
@@ -466,7 +472,7 @@ extension TouchMyMac {
         let defaults = UserDefaults.standard
         
         defaults.register(defaults: [
-            "holdDuration" : 0.1,
+            "holdDuration" : 0.25,
             "doubleClickDistance" : 8,
             "errorResistance" : 4,
             "ignoreOriginTouches" : true,
@@ -476,6 +482,7 @@ extension TouchMyMac {
             "isFourFingerSwipeUpKeyboardEnabled" : true,
             "fiveFingerHoldShortcutSpec" : "fn",
             "fourFingerSwipeLeftSequenceSpec" : "cmd+a, delete",
+            "isLaunchAtLoginEnabled" : true,
             "isScrollInertiaEnabled" : true,
             "scrollSpeedMultiplier" : 1.4,
             "scrollInertiaDecelerationPerFrame" : 0.95,
@@ -483,6 +490,11 @@ extension TouchMyMac {
         ])
         
         holdDuration = defaults.double(forKey: "holdDuration")
+        // Hold is now measured from touch-down; older sub-0.1 s values would turn scroll starts into drags,
+        // and 0.4 s was the previous default before the drag delay was shortened.
+        if holdDuration < 0.1 || holdDuration == 0.4 {
+            holdDuration = 0.25
+        }
         doubleClickDistance = defaults.double(forKey: "doubleClickDistance")
         errorResistance = defaults.integer(forKey: "errorResistance")
         ignoreOriginTouches = defaults.bool(forKey: "ignoreOriginTouches")
@@ -524,6 +536,18 @@ extension TouchMyMac {
         touchManager.fiveFingerHoldShortcutSpec = fiveFingerHoldShortcutSpec
         touchManager.fourFingerSwipeLeftSequenceSpec = fourFingerSwipeLeftSequenceSpec
 
+        isLaunchAtLoginEnabled = defaults.bool(forKey: "isLaunchAtLoginEnabled")
+        applyLaunchAtLogin(isLaunchAtLoginEnabled)
+        observers.append(
+            $isLaunchAtLoginEnabled
+                .dropFirst()
+                .removeDuplicates()
+                .sink { [weak self] enabled in
+                    UserDefaults.standard.set(enabled, forKey: "isLaunchAtLoginEnabled")
+                    self?.applyLaunchAtLogin(enabled)
+                }
+        )
+
         isScrollInertiaEnabled = defaults.bool(forKey: "isScrollInertiaEnabled")
         scrollSpeedMultiplier = CGFloat(defaults.double(forKey: "scrollSpeedMultiplier"))
         scrollInertiaDecelerationPerFrame = CGFloat(defaults.double(forKey: "scrollInertiaDecelerationPerFrame"))
@@ -532,6 +556,24 @@ extension TouchMyMac {
         touchManager.scrollSpeedMultiplier = scrollSpeedMultiplier
         touchManager.scrollInertiaDecelerationPerFrame = scrollInertiaDecelerationPerFrame
         touchManager.scrollInertiaVelocityMultiplier = scrollInertiaVelocityMultiplier
+    }
+    
+    
+    /// Registers or removes TouchMyMac as a login item so it opens at startup (macOS 13+).
+    func applyLaunchAtLogin(_ enabled: Bool) {
+        guard #available(macOS 13.0, *) else { return }
+        let service = SMAppService.mainApp
+        do {
+            if enabled, service.status != .enabled {
+                try service.register()
+                addDiagnosticsEvent("Registered to open at login")
+            } else if !enabled, service.status == .enabled {
+                try service.unregister()
+                addDiagnosticsEvent("Removed from login items")
+            }
+        } catch {
+            addDiagnosticsEvent("Open at login change failed: \(error.localizedDescription)")
+        }
     }
     
     
@@ -550,6 +592,7 @@ extension TouchMyMac {
         defaults.set(fiveFingerHoldShortcutSpec, forKey: "fiveFingerHoldShortcutSpec")
         defaults.set(fourFingerSwipeLeftSequenceSpec, forKey: "fourFingerSwipeLeftSequenceSpec")
 
+        defaults.set(isLaunchAtLoginEnabled, forKey: "isLaunchAtLoginEnabled")
         defaults.set(isScrollInertiaEnabled, forKey: "isScrollInertiaEnabled")
         defaults.set(Double(scrollSpeedMultiplier), forKey: "scrollSpeedMultiplier")
         defaults.set(Double(scrollInertiaDecelerationPerFrame), forKey: "scrollInertiaDecelerationPerFrame")
@@ -760,7 +803,7 @@ extension TouchMyMac {
             
         case \.holdDuration:
             return("Hold Duration",
-                   "How long do you have to hold finger to initiate hold&drag")
+                   "How long a finger must rest in place before moving it drags instead of scrolls (e.g. to move windows).")
             
         case \.doubleClickDistance:
             return("Double Click Zone",
@@ -773,6 +816,10 @@ extension TouchMyMac {
         case \.errorResistance:
             return("Error Resistance",
                    "If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs.")
+
+        case \.isLaunchAtLoginEnabled:
+            return("Open at Login",
+                   "Start TouchMyMac automatically when you log in.")
 
         case \.isScrollInertiaEnabled:
             return("Scroll Inertia",

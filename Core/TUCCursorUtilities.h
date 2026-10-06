@@ -41,9 +41,16 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)performSecondaryClickAt:(CGPoint)aLocation;
 
 - (void)dragCursorTo:(CGPoint)aLocation phase:(NSTouchPhase)phase;
+
+/// Pen input: hover moves the cursor, tip contact becomes a left-button drag carrying tablet pressure.
+- (void)penHoverAt:(CGPoint)aLocation;
+- (void)penDownAt:(CGPoint)aLocation pressure:(CGFloat)pressure;
+- (void)penDragTo:(CGPoint)aLocation pressure:(CGFloat)pressure;
+- (void)penUpAt:(CGPoint)aLocation;
 - (void)stopDraggingCursor;
 
 - (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase;
+- (void)cancelMomentumScroll;
 
 - (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2;
 - (void)stopMagnifying;
@@ -53,6 +60,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)performShortcutChordSpec:(NSString *)shortcutSpec;
 - (void)performShortcutSequenceSpec:(NSString *)shortcutSequenceSpec;
 - (void)performMissionControl;
+/// Moves to the neighbouring Space / full-screen app (Ctrl+→ or Ctrl+←).
+- (void)switchSpaceToRight:(BOOL)toRight;
 
 
 @end
