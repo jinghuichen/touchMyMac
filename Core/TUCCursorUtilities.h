@@ -44,6 +44,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)stopDraggingCursor;
 
 - (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase;
+/// Ends an ongoing scroll gesture without inertia, e.g. when the touch turns into another gesture.
+- (void)endScrollGesture;
+@property (readonly) BOOL isMomentumScrolling;
 
 - (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2;
 - (void)stopMagnifying;
@@ -51,6 +54,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)beginHoldingShortcutSpec:(NSString *)shortcutSpec;
 - (void)endHeldShortcut;
 - (void)performShortcutChordSpec:(NSString *)shortcutSpec;
+- (void)performKeyCode:(CGKeyCode)keyCode modifierFlags:(CGEventFlags)flags;
 - (void)performShortcutSequenceSpec:(NSString *)shortcutSequenceSpec;
 - (void)performMissionControl;
 

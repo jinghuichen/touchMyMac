@@ -64,6 +64,8 @@ class TouchMyMac: NSObject, ObservableObject {
     
     @Published var connectedScreens = [TUCScreen]()
     var connectedTouchscreen: TUCScreen?
+
+    weak var floatingKeyboard: FloatingKeyboardPanel?
     
     var lastDateUSBAdded: Date?
     var lastDateScreenAdded: Date?
@@ -220,61 +222,6 @@ class TouchMyMac: NSObject, ObservableObject {
         addDiagnosticsEvent("Requested Accessibility access prompt")
     }
 
-    func sendVirtualKeyboardKey(token: String, shifted: Bool = false) {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let shortcutSpec: String
-        if let mappedShortcut = virtualKeyboardShortcutSpec(for: trimmed, shifted: shifted) {
-            shortcutSpec = mappedShortcut
-        } else if shifted && trimmed.range(of: #"^[a-z]$"#, options: .regularExpression) != nil {
-            shortcutSpec = "shift+\(trimmed)"
-        } else {
-            shortcutSpec = trimmed
-        }
-
-        touchManager.performShortcutChordSpec(shortcutSpec)
-        addDiagnosticsEvent("Virtual key: \(shortcutSpec)")
-    }
-
-    private func virtualKeyboardShortcutSpec(for token: String, shifted: Bool) -> String? {
-        if shifted && token.range(of: #"^[a-z]$"#, options: .regularExpression) != nil {
-            return "shift+\(token)"
-        }
-
-        let symbolShortcutMap: [String: String] = [
-            "-": "hyphen",
-            "/": "slash",
-            ":": "shift+semicolon",
-            ";": "semicolon",
-            "(": "shift+9",
-            ")": "shift+0",
-            "$": "shift+4",
-            "&": "shift+7",
-            "@": "shift+2",
-            "\"": "shift+quote",
-            ".": "period",
-            ",": "comma",
-            "?": "shift+slash",
-            "!": "shift+1",
-            "'": "quote",
-            "#": "shift+3",
-            "%": "shift+5",
-            "^": "shift+6",
-            "*": "shift+8",
-            "+": "shift+equal",
-            "=": "equal",
-            "_": "shift+hyphen",
-            "\\": "backslash",
-            "|": "shift+backslash",
-            "~": "shift+grave",
-            "<": "shift+comma"
-        ]
-
-        return symbolShortcutMap[token]
-    }
-    
-    
     override init() {
         self.touchManager = TUCTouchInputManager()
         
@@ -720,6 +667,15 @@ extension TouchMyMac: TUCTouchDelegate {
             }
         }
     }
+
+    func shouldClaimTouch(_ touchID: UUID, atScreenLocation location: CGPoint) -> Bool {
+        guard let keyboard = floatingKeyboard, keyboard.isVisible else { return false }
+        return keyboard.keyboardView.beginTouch(touchID, atScreenLocation: location)
+    }
+
+    func claimedTouchDidEnd(_ touchID: UUID) {
+        floatingKeyboard?.keyboardView.endTouch(touchID)
+    }
 }
 
 
@@ -736,7 +692,7 @@ extension TouchMyMac {
             
         case \.isSecondaryClickEnabled:
             return("Secondary Click",
-                   "While your pointing finger is resting on the screen, tap another finger in proximity to it to generate a secondary click event at the location of the first finger.")
+                   "Tap the screen with two fingers at once to secondary click at the first finger, like on a Mac trackpad.")
             
         case \.isMagnificationEnabled:
             return("Magnification",

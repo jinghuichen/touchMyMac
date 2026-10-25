@@ -62,6 +62,13 @@ typedef NS_ENUM(NSUInteger, TUCCursorAction) {
 
 @property (nonatomic) CGPoint location;
 @property CGPoint previousLocation;
+@property CGPoint initialLocation; // where the touch first landed
+
+/**
+ YES if the delegate claimed this touch when it began (e.g. a press on the floating keyboard).
+ Claimed touches bypass cursor and gesture recognition entirely.
+ */
+@property BOOL isClaimed;
 
 @property NSInteger lastUpdated; // the page ID during last update
 @property (strong, nonatomic) NSDate *lastUpdatedAt; // wall-clock timestamp of last updateTouch

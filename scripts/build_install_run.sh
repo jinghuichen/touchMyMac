@@ -62,15 +62,7 @@ run_install_cmd() {
   fi
 }
 
-echo "==> Quitting running app (if any)…"
-osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
-pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-
-echo "==> Removing existing install: $TARGET_APP_PATH"
-if [[ -e "$TARGET_APP_PATH" ]]; then
-  run_install_cmd rm -rf "$TARGET_APP_PATH"
-fi
-
+# Build first: if it fails, `set -e` stops here and the installed app stays untouched.
 echo "==> Building ($CONFIGURATION)…"
 rm -rf "$DERIVED_DATA_PATH"
 
@@ -88,6 +80,15 @@ BUILT_APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION/$APP_NAME.app"
 if [[ ! -d "$BUILT_APP_PATH" ]]; then
   echo "Build succeeded but app not found at: $BUILT_APP_PATH" >&2
   exit 1
+fi
+
+echo "==> Quitting running app (if any)…"
+osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
+pkill -x "$APP_NAME" >/dev/null 2>&1 || true
+
+echo "==> Removing existing install: $TARGET_APP_PATH"
+if [[ -e "$TARGET_APP_PATH" ]]; then
+  run_install_cmd rm -rf "$TARGET_APP_PATH"
 fi
 
 echo "==> Installing to: $TARGET_APP_PATH"
