@@ -79,6 +79,7 @@ static const CGFloat kFourFingerSwipeMaxVerticalTravelMM = 18.0f;
 static const CGFloat kFourFingerSwipeMaxHorizontalTravelMM = 18.0f;
 static const NSTimeInterval kFiveFingerHoldActivationDuration = 0.25;
 static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
+static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
 
 #pragma mark   Start & Stop
 
@@ -128,8 +129,9 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
     // go through all touches: if the frame is not the latest one, the touch might be old and should be removed.
     
     for (TUCTouch *touch in self.touchSet) {
-        
-        if (touch.lastUpdated + self.errorResistance < self.currentFrameID) {
+
+        // Ended touches linger in the set for a moment; only expire each touch once.
+        if (touch.isActive && touch.lastUpdated + self.errorResistance < self.currentFrameID) {
             // Some touchscreens don't reliably report liftoff (tip switch off) for the final contact.
             // If a touch disappears from the report stream, treat it as a liftoff so tap/scroll end
             // can still be recognized.
@@ -197,10 +199,11 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 }
 
 - (CGFloat)distanceMMFromPoint:(CGPoint)p1 toPoint:(CGPoint)p2 {
-    CGFloat relDx = p1.x - p2.x;
-    CGFloat relDy = p1.y - p2.y;
-    CGFloat relDistance = sqrt(pow(relDx, 2) + pow(relDy, 2));
-    return relDistance * [self touchscreen].physicalSize.width;
+    // Points are relative to the screen, so each axis scales with its own physical extent.
+    CGSize physicalSize = [self touchscreen].physicalSize;
+    CGFloat dxMM = (p1.x - p2.x) * physicalSize.width;
+    CGFloat dyMM = (p1.y - p2.y) * physicalSize.height;
+    return sqrt(dxMM * dxMM + dyMM * dyMM);
 }
 
 - (CGFloat)cursorTouchDistanceFromStartMM {
@@ -355,7 +358,18 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
     
     BOOL isNewTouch = NO;
     TUCTouch *touch = [self obtainTouchWithID:contactID isNew:&isNewTouch];
-    
+
+    if (isNewTouch && isOnSurface && self.postMouseEvents
+        && [self.delegate shouldClaimTouch:touch.uuid atScreenLocation:[self convertScreenPointRelativeToAbsolute:point]]) {
+        touch.isClaimed = YES;
+    }
+
+    if (touch.isClaimed) {
+        [self updateClaimedTouch:touch withLocation:point onSurface:isOnSurface isNew:isNewTouch
+                       contactID:contactID digitizerPoint:digitizerPoint tooLargeForFinger:confidenceFlag];
+        return;
+    }
+
     if (isNewTouch && (self.cursorTouch == nil || !self.cursorTouch.isActive)) {
         // Always start a clean gesture session for a new primary touch.
         [self stopCurrentGesture];
@@ -384,10 +398,7 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
     
     if(touch.previousPhase != NSTouchPhaseEnded && !isNewTouch) {
         // update to an existing touch... check if stationary or not
-        CGFloat digitizerRelDistance = sqrt(pow(touch.location.x - touch.previousLocation.x, 2) + pow(touch.location.y - touch.previousLocation.y, 2));
-        CGFloat screenSize = [self touchscreen].physicalSize.width;
-        BOOL isStationary = (digitizerRelDistance * screenSize) < kStationaryThresholdMM;
-//        BOOL isStationary = CGPointEqualToPoint(touch.location, touch.previousLocation);
+        BOOL isStationary = [self distanceMMFromPoint:touch.location toPoint:touch.previousLocation] < kStationaryThresholdMM;
         
         if (touch.uuid == self.cursorTouch.uuid) {
             CGFloat distanceFromStartMM = [self cursorTouchDistanceFromStartMM];
@@ -407,8 +418,40 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
     
     
     [self.delegate touchesDidChange];
-    
+
     return;
+}
+
+
+/**
+ Claimed touches only need to be kept alive and ended; the delegate does everything else.
+ */
+- (void)updateClaimedTouch:(TUCTouch *)touch
+              withLocation:(CGPoint)point
+                 onSurface:(BOOL)isOnSurface
+                     isNew:(BOOL)isNewTouch
+                 contactID:(NSInteger)contactID
+            digitizerPoint:(CGPoint)digitizerPoint
+         tooLargeForFinger:(BOOL)confidenceFlag {
+
+    if (!isNewTouch && isOnSurface && [self distanceMMFromPoint:point toPoint:touch.location] > kClaimedTouchJumpDistanceMM) {
+        // Some screens hand a contact ID to the next finger without reporting liftoff in between.
+        // During fast typing that next finger lands on another key, so start a fresh touch for it.
+        [touch setIsOnSurface:NO];
+        [touch setPhase:NSTouchPhaseEnded];
+        [self removeTouch:touch now:NO];
+        [self updateTouch:contactID withLocation:digitizerPoint onSurface:isOnSurface tooLargeForFinger:confidenceFlag];
+        return;
+    }
+
+    [touch setLocation:point];
+    [touch setIsOnSurface:isOnSurface];
+    [touch setLastUpdated:self.currentFrameID];
+
+    if (!isOnSurface) {
+        [touch setPhase:NSTouchPhaseEnded];
+        [self removeTouch:touch now:NO];
+    }
 }
 
 
@@ -653,7 +696,10 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
         if (!suppressEndedAction && shouldTreatAsTap) {
             [self performMouseEventForGesture:TUCCursorGestureTap];
         }
-        
+
+        // The ended touch lingers in the set for a moment. Release it so reports from other
+        // fingers don't run this liftoff logic again (which used to fire a late tap here).
+        self.cursorTouch = nil;
         return;
     }
     
@@ -926,15 +972,17 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 #pragma mark - Touch Set
 
 /**
- The `touchSet` can contain touches whose phase is ended or cancelled. activeTouches. filteres those out
+ The `touchSet` can contain touches whose phase is ended or cancelled, and touches claimed by the delegate.
+ activeTouches filters those out, leaving the touches that take part in cursor and gesture handling.
  */
 - (NSSet<TUCTouch *> *)activeTouches {
-    NSPredicate *p1 = [NSPredicate predicateWithFormat:@"phase != %d", NSTouchPhaseEnded];
-    NSPredicate *p2 = [NSPredicate predicateWithFormat:@"phase != %d", NSTouchPhaseCancelled];
-    
-    NSPredicate *predicate = [NSCompoundPredicate andPredicateWithSubpredicates:@[p1, p2]];
-    
-    return [self.touchSet filteredSetUsingPredicate:predicate];
+    NSMutableSet<TUCTouch *> *active = [NSMutableSet setWithCapacity:self.touchSet.count];
+    for (TUCTouch *touch in self.touchSet) {
+        if (touch.isActive && !touch.isClaimed) {
+            [active addObject:touch];
+        }
+    }
+    return active;
 }
 
 
@@ -957,7 +1005,10 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
                                    screenDistance /  [self touchscreen].frame.size.height);
     
     NSPredicate * predicate = [NSPredicate predicateWithBlock: ^BOOL(TUCTouch *t, NSDictionary *bind) {
-        
+        if (t.isClaimed) {
+            return NO;
+        }
+
         CGFloat dx = [t location].x - point.x;
         CGFloat dy = [t location].y - point.y;
         
@@ -972,11 +1023,10 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
  Removes a touch from the touch set. As a previous touch might be important for gesture evaluation, it is removed after half a second
  */
 - (void)removeTouch:(TUCTouch *)touch now:(BOOL)instantDeletion{
-//    if (touch.uuid == self.touchUsedForCursor.uuid) {
-//        [self processTouchesForCursorInput];
-//        self.touchUsedForCursor = nil;
-//    }
-    
+    if (touch.isClaimed) {
+        [self.delegate claimedTouchDidEnd:touch.uuid];
+    }
+
     if (instantDeletion) {
         [[self touchSet] removeObject:touch];
         [[self delegate] touchesDidChange];
@@ -1001,11 +1051,13 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
  Checks the touch set if a touch exists
  */
 - (TUCTouch *)findTouchWithID:(NSInteger)contactID includingPastTouches:(BOOL)includePastTouches {
-    NSSet *set = includePastTouches ? self.touchSet : [self activeTouches];
-    
-    NSPredicate *predicate = [NSPredicate predicateWithFormat:@"contactID == %d", contactID];
-    TUCTouch *touch = [[set filteredSetUsingPredicate:predicate] anyObject];
-    return touch;
+    // Runs for every contact in every report, so avoid building predicates here.
+    for (TUCTouch *touch in self.touchSet) {
+        if (touch.contactID == contactID && (includePastTouches || touch.isActive)) {
+            return touch;
+        }
+    }
+    return nil;
 }
 
 /**
@@ -1215,8 +1267,8 @@ static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
     [[TUCCursorUtilities sharedInstance] moveCursorTo:loc];
 }
 
-- (void)performShortcutChordSpec:(NSString *)shortcutSpec {
-    [[TUCCursorUtilities sharedInstance] performShortcutChordSpec:shortcutSpec];
+- (void)performKeyCode:(CGKeyCode)keyCode modifierFlags:(CGEventFlags)flags {
+    [[TUCCursorUtilities sharedInstance] performKeyCode:keyCode modifierFlags:flags];
 }
 
 

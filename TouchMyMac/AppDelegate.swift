@@ -8,6 +8,7 @@
 import Cocoa
 import SwiftUI
 import Combine
+import Carbon.HIToolbox
 
 
 @main
@@ -33,7 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }()
 
     lazy var floatingKeyboardPanel: FloatingKeyboardPanel = {
-        return FloatingKeyboardPanel.panel(model: self.model)
+        return FloatingKeyboardPanel(model: self.model)
     }()
     
     @IBAction func toggleActivationMenu(_ sender: Any) {
@@ -222,246 +223,445 @@ class DebugOverlay: NSWindow {
 }
 
 
-struct FloatingKeyboardKey: Identifiable {
-    let id: String
-    let title: String
-    let token: String?
-    let width: CGFloat
-    let isAccent: Bool
+// MARK: - Floating Keyboard
 
-    init(title: String, token: String? = nil, width: CGFloat = 42, isAccent: Bool = false) {
-        self.id = "\(title)|\(token ?? title.lowercased())"
-        self.title = title
-        self.token = token ?? title.lowercased()
-        self.width = width
-        self.isAccent = isAccent
+/**
+ One key of the floating keyboard. Key codes are ANSI virtual key codes,
+ so the active input source decides which character is typed.
+ */
+struct KeyboardKey {
+    enum Role: Equatable {
+        case character
+        case modifier(CGEventFlags) // sticky: applies to the next key press
+        case capsLock
+        case hide
+    }
+
+    enum Alignment {
+        case center, leading, trailing
+    }
+
+    var label: String
+    var shiftedLabel: String? = nil
+    var glyph: String? = nil
+    var keyCode: Int = 0
+    var width: CGFloat = 1 // in key units
+    var role: Role = .character
+    var alignment: Alignment = .center
+    var repeats = false
+
+    var isLetter: Bool {
+        label.count == 1 && label.first!.isLetter
+    }
+
+    /// Function keys get the darker cap, like on a Mac keyboard.
+    var isFunctionKey: Bool {
+        role != .character || alignment != .center
+    }
+
+    static func letter(_ label: String, _ keyCode: Int) -> KeyboardKey {
+        KeyboardKey(label: label, keyCode: keyCode)
+    }
+
+    static func symbol(_ label: String, _ shiftedLabel: String, _ keyCode: Int) -> KeyboardKey {
+        KeyboardKey(label: label, shiftedLabel: shiftedLabel, keyCode: keyCode)
+    }
+
+    static func arrow(_ label: String, _ keyCode: Int) -> KeyboardKey {
+        KeyboardKey(label: label, keyCode: keyCode, repeats: true)
+    }
+
+    static func modifier(_ label: String, glyph: String, flag: CGEventFlags, width: CGFloat, alignment: Alignment) -> KeyboardKey {
+        KeyboardKey(label: label, glyph: glyph, width: width, role: .modifier(flag), alignment: alignment)
     }
 }
 
-struct FloatingKeyboardButtonStyle: ButtonStyle {
-    let isAccent: Bool
-    let isActive: Bool
-    let isFlashing: Bool
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.975 : 1.0)
-            .opacity(configuration.isPressed ? 0.92 : 1.0)
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(borderColor(configuration: configuration), lineWidth: configuration.isPressed || isFlashing ? 2.5 : 1)
-            )
-            .shadow(color: .black.opacity(configuration.isPressed ? 0.08 : 0.16),
-                    radius: configuration.isPressed ? 2 : 8,
-                    y: configuration.isPressed ? 1 : 4)
-            .animation(.easeOut(duration: 0.07), value: configuration.isPressed)
-            .animation(.easeOut(duration: 0.09), value: isFlashing)
+/**
+ Mac-style keyboard drawn by hand instead of SwiftUI, so a key press is a hit test plus one small redraw.
+ Touches arrive directly from the touch input manager (see `TUCTouchDelegate.shouldClaimTouch`),
+ so keys fire on touch down and overlapping fingers each produce their own key press.
+ */
+final class FloatingKeyboardView: NSView {
+
+    private enum Slot {
+        case key(KeyboardKey)
+        case stacked(KeyboardKey, KeyboardKey) // two half-height keys in one column, like the up/down arrows
     }
 
-    private func borderColor(configuration: Configuration) -> Color {
-        if isFlashing {
-            return Color.accentColor
-        }
-        if configuration.isPressed {
-            return Color.accentColor.opacity(0.85)
-        }
-        if isActive {
-            return Color.accentColor.opacity(0.65)
-        }
-        if isAccent {
-            return Color.primary.opacity(0.18)
-        }
-        return Color.primary.opacity(0.12)
+    private enum VerticalPlacement {
+        case center, top, bottom
     }
-}
 
-struct FloatingKeyboardView: View {
-    @ObservedObject var model: TouchMyMac
-    @State private var shiftEnabled = false
-    @State private var symbolKeyboardEnabled = false
-    @State private var flashedKeyID: String?
-    let closeAction: () -> Void
+    private static let unit: CGFloat = 56
+    private static let gap: CGFloat = 6
+    private static let padding: CGFloat = 10
+    private static let keyRepeatDelay: TimeInterval = 0.45
+    private static let keyRepeatInterval: TimeInterval = 0.06
 
-    private var rows: [[FloatingKeyboardKey]] {
-        if symbolKeyboardEnabled {
-            return [
-                ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map { FloatingKeyboardKey(title: $0, width: 58) },
-                ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""].map { FloatingKeyboardKey(title: $0, width: 58) },
-                [".", ",", "?", "!", "'", "#", "%", "^", "*"].map { FloatingKeyboardKey(title: $0, width: 62) },
-                [FloatingKeyboardKey(title: "ABC", token: nil, width: 94, isAccent: true)]
-                    + ["+", "=", "_", "\\", "|", "~", "<"].map { FloatingKeyboardKey(title: $0, width: 62) }
-                    + [FloatingKeyboardKey(title: "Delete", token: "delete", width: 96, isAccent: true)],
-                [
-                    FloatingKeyboardKey(title: "ABC", token: nil, width: 76, isAccent: true),
-                    FloatingKeyboardKey(title: "Space", token: "space", width: 360, isAccent: true),
-                    FloatingKeyboardKey(title: "Return", token: "return", width: 116, isAccent: true)
-                ]
-            ]
-        }
-
-        return [
-            ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"].map { FloatingKeyboardKey(title: $0, width: 58) },
-            ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"].map { FloatingKeyboardKey(title: $0, width: 58) },
-            ["a", "s", "d", "f", "g", "h", "j", "k", "l"].map { FloatingKeyboardKey(title: $0, width: 62) },
-            [FloatingKeyboardKey(title: "Shift", token: nil, width: 94, isAccent: true)]
-                + ["z", "x", "c", "v", "b", "n", "m"].map { FloatingKeyboardKey(title: $0, width: 62) }
-                + [FloatingKeyboardKey(title: "Delete", token: "delete", width: 96, isAccent: true)],
-            [
-                FloatingKeyboardKey(title: "#+=", token: nil, width: 76, isAccent: true),
-                FloatingKeyboardKey(title: "Space", token: "space", width: 360, isAccent: true),
-                FloatingKeyboardKey(title: "Return", token: "return", width: 116, isAccent: true)
-            ]
+    private static let rows: [[Slot]] = [
+        [
+            .key(.symbol("`", "~", kVK_ANSI_Grave)),
+            .key(.symbol("1", "!", kVK_ANSI_1)),
+            .key(.symbol("2", "@", kVK_ANSI_2)),
+            .key(.symbol("3", "#", kVK_ANSI_3)),
+            .key(.symbol("4", "$", kVK_ANSI_4)),
+            .key(.symbol("5", "%", kVK_ANSI_5)),
+            .key(.symbol("6", "^", kVK_ANSI_6)),
+            .key(.symbol("7", "&", kVK_ANSI_7)),
+            .key(.symbol("8", "*", kVK_ANSI_8)),
+            .key(.symbol("9", "(", kVK_ANSI_9)),
+            .key(.symbol("0", ")", kVK_ANSI_0)),
+            .key(.symbol("-", "_", kVK_ANSI_Minus)),
+            .key(.symbol("=", "+", kVK_ANSI_Equal)),
+            .key(KeyboardKey(label: "delete", keyCode: kVK_Delete, width: 1.5, alignment: .trailing, repeats: true))
+        ],
+        [.key(KeyboardKey(label: "tab", keyCode: kVK_Tab, width: 1.5, alignment: .leading))]
+            + letters("qwertyuiop", [kVK_ANSI_Q, kVK_ANSI_W, kVK_ANSI_E, kVK_ANSI_R, kVK_ANSI_T,
+                                     kVK_ANSI_Y, kVK_ANSI_U, kVK_ANSI_I, kVK_ANSI_O, kVK_ANSI_P])
+            + [
+                .key(.symbol("[", "{", kVK_ANSI_LeftBracket)),
+                .key(.symbol("]", "}", kVK_ANSI_RightBracket)),
+                .key(.symbol("\\", "|", kVK_ANSI_Backslash))
+            ],
+        [.key(KeyboardKey(label: "caps lock", width: 1.75, role: .capsLock, alignment: .leading))]
+            + letters("asdfghjkl", [kVK_ANSI_A, kVK_ANSI_S, kVK_ANSI_D, kVK_ANSI_F, kVK_ANSI_G,
+                                    kVK_ANSI_H, kVK_ANSI_J, kVK_ANSI_K, kVK_ANSI_L])
+            + [
+                .key(.symbol(";", ":", kVK_ANSI_Semicolon)),
+                .key(.symbol("'", "\"", kVK_ANSI_Quote)),
+                .key(KeyboardKey(label: "return", keyCode: kVK_Return, width: 1.75, alignment: .trailing))
+            ],
+        [.key(.modifier("shift", glyph: "⇧", flag: .maskShift, width: 2.25, alignment: .leading))]
+            + letters("zxcvbnm", [kVK_ANSI_Z, kVK_ANSI_X, kVK_ANSI_C, kVK_ANSI_V, kVK_ANSI_B, kVK_ANSI_N, kVK_ANSI_M])
+            + [
+                .key(.symbol(",", "<", kVK_ANSI_Comma)),
+                .key(.symbol(".", ">", kVK_ANSI_Period)),
+                .key(.symbol("/", "?", kVK_ANSI_Slash)),
+                .key(.modifier("shift", glyph: "⇧", flag: .maskShift, width: 2.25, alignment: .trailing))
+            ],
+        [
+            .key(KeyboardKey(label: "", role: .hide)),
+            .key(.modifier("control", glyph: "⌃", flag: .maskControl, width: 1, alignment: .leading)),
+            .key(.modifier("option", glyph: "⌥", flag: .maskAlternate, width: 1, alignment: .leading)),
+            .key(.modifier("command", glyph: "⌘", flag: .maskCommand, width: 1.25, alignment: .leading)),
+            .key(KeyboardKey(label: "", keyCode: kVK_Space, width: 5, repeats: true)),
+            .key(.modifier("command", glyph: "⌘", flag: .maskCommand, width: 1.25, alignment: .trailing)),
+            .key(.modifier("option", glyph: "⌥", flag: .maskAlternate, width: 1, alignment: .trailing)),
+            .key(.arrow("◀", kVK_LeftArrow)),
+            .stacked(.arrow("▲", kVK_UpArrow), .arrow("▼", kVK_DownArrow)),
+            .key(.arrow("▶", kVK_RightArrow))
         ]
+    ]
+
+    static let contentSize = NSSize(width: 14.5 * unit + 2 * padding,
+                                    height: CGFloat(rows.count) * unit + 2 * padding)
+
+    private weak var model: TouchMyMac?
+    private let keys: [(key: KeyboardKey, rect: NSRect)] = FloatingKeyboardView.makeLayout()
+
+    private var latchedModifiers: CGEventFlags = []
+    private var isCapsLockOn = false
+    private var pressedKeys: [UUID: Int] = [:] // touch (or mouse) -> index into `keys`
+    private var repeatTimers: [UUID: Timer] = [:]
+    private let mousePressID = UUID()
+
+    init(model: TouchMyMac) {
+        self.model = model
+        super.init(frame: NSRect(origin: .zero, size: Self.contentSize))
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Floating Keyboard")
-                        .font(.title3.weight(.semibold))
-                    Text("Four-finger swipe up shows this panel. Four-finger swipe down hides it.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Button("Hide", action: closeAction)
-                    .buttonStyle(.borderless)
-                    .foregroundColor(.secondary)
-            }
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
-            VStack(spacing: 10) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    HStack(spacing: 10) {
-                        ForEach(row) { key in
-                            keyButton(key)
-                        }
-                    }
-                }
-            }
+    override var isFlipped: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-            if shiftEnabled {
-                Text("Shift will apply to the next letter key.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+
+    // MARK: Input
+
+    /// Returns false when the location is not on a key, so the touch falls through to regular cursor handling.
+    func beginTouch(_ touchID: UUID, atScreenLocation location: CGPoint) -> Bool {
+        guard let window, let primaryScreen = NSScreen.screens.first else { return false }
+        // Touch locations are global display coordinates with the origin at the top left of the primary screen.
+        let screenPoint = NSPoint(x: location.x, y: primaryScreen.frame.maxY - location.y)
+        let point = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
+        guard let index = keyIndex(at: point) else { return false }
+        press(index, id: touchID)
+        return true
+    }
+
+    func endTouch(_ touchID: UUID) {
+        repeatTimers.removeValue(forKey: touchID)?.invalidate()
+        if let index = pressedKeys.removeValue(forKey: touchID) {
+            setNeedsDisplay(keys[index].rect.insetBy(dx: -2, dy: -2))
+        }
+    }
+
+    func reset() {
+        repeatTimers.values.forEach { $0.invalidate() }
+        repeatTimers.removeAll()
+        pressedKeys.removeAll()
+        latchedModifiers = []
+        isCapsLockOn = false
+        needsDisplay = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let index = keyIndex(at: convert(event.locationInWindow, from: nil)) {
+            press(index, id: mousePressID)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        endTouch(mousePressID)
+    }
+
+    private func keyIndex(at point: NSPoint) -> Int? {
+        // Grow each key by half the gap so a touch between two keys still hits one of them.
+        keys.firstIndex { $0.rect.insetBy(dx: -Self.gap / 2, dy: -Self.gap / 2).contains(point) }
+    }
+
+    private func press(_ index: Int, id: UUID) {
+        let key = keys[index].key
+        pressedKeys[id] = index
+        setNeedsDisplay(keys[index].rect.insetBy(dx: -2, dy: -2))
+
+        switch key.role {
+        case .modifier(let flag):
+            latchedModifiers.formSymmetricDifference(flag)
+            needsDisplay = true
+
+        case .capsLock:
+            isCapsLockOn.toggle()
+            needsDisplay = true
+
+        case .hide:
+            window?.orderOut(nil)
+
+        case .character:
+            var flags = latchedModifiers
+            if isCapsLockOn && key.isLetter {
+                flags.insert(.maskShift)
+            }
+            send(key, flags: flags)
+
+            if !latchedModifiers.isEmpty {
+                latchedModifiers = []
+                needsDisplay = true
+            }
+            if key.repeats {
+                startRepeating(key, flags: flags, id: id)
             }
         }
-        .padding(18)
-        .frame(width: 760)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
-        )
     }
 
-    @ViewBuilder
-    private func keyButton(_ key: FloatingKeyboardKey) -> some View {
-        Button {
-            handleKeyPress(key)
-        } label: {
-            Text(buttonTitle(for: key))
-                .font(.system(size: 17, weight: .medium, design: .rounded))
-                .frame(width: key.width, height: 56)
-                .background(backgroundColor(for: key))
-                .foregroundColor(.primary)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    private func send(_ key: KeyboardKey, flags: CGEventFlags) {
+        model?.touchManager.performKeyCode(CGKeyCode(key.keyCode), modifierFlags: flags)
+    }
+
+    private func startRepeating(_ key: KeyboardKey, flags: CGEventFlags, id: UUID) {
+        let timer = Timer(fire: Date(timeIntervalSinceNow: Self.keyRepeatDelay),
+                          interval: Self.keyRepeatInterval,
+                          repeats: true) { [weak self] _ in
+            self?.send(key, flags: flags)
         }
-        .buttonStyle(
-            FloatingKeyboardButtonStyle(
-                isAccent: key.isAccent,
-                isActive: key.title == "Shift" && shiftEnabled,
-                isFlashing: flashedKeyID == key.id
-            )
-        )
+        RunLoop.main.add(timer, forMode: .common)
+        repeatTimers[id]?.invalidate()
+        repeatTimers[id] = timer
     }
 
-    private func handleKeyPress(_ key: FloatingKeyboardKey) {
-        if key.title == "Shift" {
-            flashKey(key.id)
-            shiftEnabled.toggle()
+
+    // MARK: Layout
+
+    private static func letters(_ letters: String, _ keyCodes: [Int]) -> [Slot] {
+        zip(letters, keyCodes).map { .key(.letter(String($0), $1)) }
+    }
+
+    private static func makeLayout() -> [(key: KeyboardKey, rect: NSRect)] {
+        var layout: [(key: KeyboardKey, rect: NSRect)] = []
+
+        for (rowIndex, row) in rows.enumerated() {
+            let y = padding + CGFloat(rowIndex) * unit
+            var x = padding
+
+            for slot in row {
+                switch slot {
+                case .key(let key):
+                    let width = key.width * unit
+                    layout.append((key, NSRect(x: x, y: y, width: width, height: unit).insetBy(dx: gap / 2, dy: gap / 2)))
+                    x += width
+
+                case .stacked(let top, let bottom):
+                    let cell = NSRect(x: x, y: y, width: unit, height: unit).insetBy(dx: gap / 2, dy: gap / 2)
+                    let (topRect, bottomRect) = cell.divided(atDistance: cell.height / 2, from: .minYEdge)
+                    layout.append((top, topRect.insetBy(dx: 0, dy: 1)))
+                    layout.append((bottom, bottomRect.insetBy(dx: 0, dy: 1)))
+                    x += unit
+                }
+            }
+        }
+        return layout
+    }
+
+
+    // MARK: Drawing
+
+    override func draw(_ dirtyRect: NSRect) {
+        let pressedIndices = Set(pressedKeys.values)
+        for (index, entry) in keys.enumerated() where entry.rect.insetBy(dx: -2, dy: -2).intersects(dirtyRect) {
+            drawKey(entry.key, in: entry.rect, isPressed: pressedIndices.contains(index))
+        }
+    }
+
+    private func drawKey(_ key: KeyboardKey, in rect: NSRect, isPressed: Bool) {
+        let cornerRadius: CGFloat = 6
+
+        NSColor.keyEdge.setFill()
+        NSBezierPath(roundedRect: rect.offsetBy(dx: 0, dy: 1), xRadius: cornerRadius, yRadius: cornerRadius).fill()
+
+        let face: NSColor
+        if isPressed {
+            face = .controlAccentColor
+        } else if case .modifier(let flag) = key.role, latchedModifiers.contains(flag) {
+            face = NSColor.controlAccentColor.withAlphaComponent(0.35)
+        } else {
+            face = key.isFunctionKey ? .functionKeyFace : .keyFace
+        }
+        face.setFill()
+        NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
+
+        drawLabels(of: key, in: rect, color: isPressed ? .white : .labelColor)
+    }
+
+    private func drawLabels(of key: KeyboardKey, in rect: NSRect, color: NSColor) {
+        let isShifted = latchedModifiers.contains(.maskShift)
+
+        if key.role == .hide {
+            drawHideSymbol(in: rect, color: color)
             return
         }
-        if key.title == "#+=" || key.title == "ABC" {
-            flashKey(key.id)
-            symbolKeyboardEnabled.toggle()
-            return
-        }
-        guard let token = key.token else { return }
-        let shouldShift = shiftEnabled
-        flashKey(key.id)
-        model.sendVirtualKeyboardKey(token: token, shifted: shouldShift)
-        if shouldShift && token.range(of: #"^[a-z]$"#, options: .regularExpression) != nil {
-            shiftEnabled = false
-        }
-    }
 
-    private func flashKey(_ keyID: String) {
-        flashedKeyID = nil
-        flashedKeyID = keyID
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            if flashedKeyID == keyID {
-                flashedKeyID = nil
+        if key.role == .capsLock {
+            let indicator = NSRect(x: rect.minX + 7, y: rect.minY + 7, width: 6, height: 6)
+            (isCapsLockOn ? NSColor.systemGreen : NSColor.keyEdge).setFill()
+            NSBezierPath(ovalIn: indicator).fill()
+        }
+
+        if key.alignment != .center {
+            if let glyph = key.glyph {
+                drawText(glyph, font: .functionKeyGlyphFont, color: color, in: rect, horizontal: key.alignment, vertical: .top)
             }
+            drawText(key.label, font: .functionKeyFont, color: color, in: rect, horizontal: key.alignment, vertical: .bottom)
+
+        } else if let shiftedLabel = key.shiftedLabel {
+            let dimmed = color.withAlphaComponent(0.45)
+            drawText(shiftedLabel, font: .symbolKeyFont, color: isShifted ? color : dimmed, in: rect, horizontal: .center, vertical: .top)
+            drawText(key.label, font: .symbolKeyFont, color: isShifted ? dimmed : color, in: rect, horizontal: .center, vertical: .bottom)
+
+        } else if key.isLetter {
+            let label = (isShifted || isCapsLockOn) ? key.label.uppercased() : key.label
+            drawText(label, font: .letterKeyFont, color: color, in: rect, horizontal: .center, vertical: .center)
+
+        } else {
+            drawText(key.label, font: .arrowKeyFont, color: color, in: rect, horizontal: .center, vertical: .center)
         }
     }
 
-    private func buttonTitle(for key: FloatingKeyboardKey) -> String {
-        if shiftEnabled && key.token?.range(of: #"^[a-z]$"#, options: .regularExpression) != nil {
-            return key.title.uppercased()
+    private func drawText(_ text: String, font: NSFont, color: NSColor, in rect: NSRect,
+                          horizontal: KeyboardKey.Alignment, vertical: VerticalPlacement) {
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        let size = (text as NSString).size(withAttributes: attributes)
+        let content = rect.insetBy(dx: 6, dy: 5)
+
+        let x: CGFloat
+        switch horizontal {
+        case .center: x = rect.midX - size.width / 2
+        case .leading: x = content.minX
+        case .trailing: x = content.maxX - size.width
         }
-        return key.title
+
+        let y: CGFloat
+        switch vertical {
+        case .center: y = rect.midY - size.height / 2
+        case .top: y = content.minY
+        case .bottom: y = content.maxY - size.height
+        }
+
+        (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: attributes)
     }
 
-    private func backgroundColor(for key: FloatingKeyboardKey) -> Color {
-        if flashedKeyID == key.id {
-            return Color.accentColor.opacity(0.28)
-        }
-        if key.title == "Shift" && shiftEnabled {
-            return Color.accentColor.opacity(0.3)
-        }
-        if key.title == "#+=" || key.title == "ABC" {
-            return Color.accentColor.opacity(symbolKeyboardEnabled ? 0.26 : 0.16)
-        }
-        if key.isAccent {
-            return Color(nsColor: .controlAccentColor).opacity(0.16)
-        }
-        return Color(nsColor: .controlBackgroundColor)
+    private func drawHideSymbol(in rect: NSRect, color: NSColor) {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        guard let image = NSImage(systemSymbolName: "keyboard.chevron.compact.down", accessibilityDescription: "Hide Keyboard")?
+            .withSymbolConfiguration(configuration) else { return }
+
+        let size = image.size
+        let imageRect = NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)
+        image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
+}
+
+
+private extension NSColor {
+    static let keyFace = NSColor(name: nil) { $0.isDark ? NSColor(white: 1, alpha: 0.22) : NSColor(white: 1, alpha: 0.95) }
+    static let functionKeyFace = NSColor(name: nil) { $0.isDark ? NSColor(white: 1, alpha: 0.1) : NSColor(white: 0.84, alpha: 0.95) }
+    static let keyEdge = NSColor(name: nil) { $0.isDark ? NSColor(white: 0, alpha: 0.45) : NSColor(white: 0, alpha: 0.2) }
+}
+
+private extension NSAppearance {
+    var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
+}
+
+private extension NSFont {
+    static let letterKeyFont = NSFont.systemFont(ofSize: 20)
+    static let symbolKeyFont = NSFont.systemFont(ofSize: 14)
+    static let arrowKeyFont = NSFont.systemFont(ofSize: 11)
+    static let functionKeyFont = NSFont.systemFont(ofSize: 10)
+    static let functionKeyGlyphFont = NSFont.systemFont(ofSize: 13)
 }
 
 
 class FloatingKeyboardPanel: NSPanel {
-    var model: TouchMyMac?
+    let keyboardView: FloatingKeyboardView
+    private weak var model: TouchMyMac?
 
-    static func panel(model: TouchMyMac) -> FloatingKeyboardPanel {
-        let window = FloatingKeyboardPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 760, height: 390),
-            styleMask: [.titled, .closable, .nonactivatingPanel, .fullSizeContentView],
-            backing: .buffered,
-            defer: true
-        )
+    init(model: TouchMyMac) {
+        self.model = model
+        self.keyboardView = FloatingKeyboardView(model: model)
 
-        window.title = "Floating Keyboard"
-        window.titleVisibility = .visible
-        window.titlebarAppearsTransparent = false
-        window.isFloatingPanel = true
-        window.hidesOnDeactivate = false
-        window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        window.isMovableByWindowBackground = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        window.standardWindowButton(.zoomButton)?.isHidden = true
-        window.model = model
+        super.init(contentRect: NSRect(origin: .zero, size: FloatingKeyboardView.contentSize),
+                   styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel, .fullSizeContentView],
+                   backing: .buffered,
+                   defer: true)
 
-        let vc = NSHostingController(
-            rootView: FloatingKeyboardView(model: model, closeAction: {
-                window.close()
-            })
-        )
-        let windowController = NSWindowController(window: window)
-        windowController.contentViewController = vc
+        title = "Keyboard"
+        titlebarAppearsTransparent = true
+        isFloatingPanel = true
+        hidesOnDeactivate = false
+        isReleasedWhenClosed = false
+        level = .floating
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        standardWindowButton(.miniaturizeButton)?.isHidden = true
+        standardWindowButton(.zoomButton)?.isHidden = true
 
-        return window
+        let background = NSVisualEffectView()
+        background.material = .hudWindow
+        background.blendingMode = .behindWindow
+        background.state = .active
+        contentView = background
+
+        // The content runs under the transparent title bar; size the window so the keys sit below it.
+        let titlebarHeight = frame.height - contentLayoutRect.height
+        let keyboardSize = FloatingKeyboardView.contentSize
+        setFrame(NSRect(x: 0, y: 0, width: keyboardSize.width, height: keyboardSize.height + titlebarHeight), display: false)
+        keyboardView.frame = contentLayoutRect
+        background.addSubview(keyboardView)
+
+        model.floatingKeyboard = self
     }
 
     override var canBecomeKey: Bool { false }
@@ -480,5 +680,15 @@ class FloatingKeyboardPanel: NSPanel {
         }
 
         orderFrontRegardless()
+    }
+
+    override func orderOut(_ sender: Any?) {
+        keyboardView.reset()
+        super.orderOut(sender)
+    }
+
+    override func close() {
+        keyboardView.reset()
+        super.close()
     }
 }

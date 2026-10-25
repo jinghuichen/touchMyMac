@@ -48,6 +48,19 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (void)performCustomAction:(TUCCursorAction)action;
 
+
+
+#pragma mark - Claimed Touches
+
+/**
+ Called once for every new touch before any gesture recognition, with the location in global display coordinates.
+ Return YES to claim the touch: it then never moves the cursor or takes part in gestures,
+ and `claimedTouchDidEnd:` is called when it lifts.
+ */
+- (BOOL)shouldClaimTouch:(NSUUID *)touchID atScreenLocation:(CGPoint)location;
+
+- (void)claimedTouchDidEnd:(NSUUID *)touchID;
+
 @end
 
 NS_ASSUME_NONNULL_END

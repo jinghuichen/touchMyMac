@@ -656,6 +656,34 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     [self pressAndReleaseShortcutChordWithDescriptors:descriptors];
 }
 
+- (void)performKeyCode:(CGKeyCode)keyCode modifierFlags:(CGEventFlags)flags {
+    static const struct { CGEventFlags flag; CGKeyCode keyCode; } modifierKeys[] = {
+        { kCGEventFlagMaskControl,   kVK_Control },
+        { kCGEventFlagMaskAlternate, kVK_Option },
+        { kCGEventFlagMaskShift,     kVK_Shift },
+        { kCGEventFlagMaskCommand,   kVK_Command },
+    };
+    const size_t modifierCount = sizeof(modifierKeys) / sizeof(modifierKeys[0]);
+
+    CGEventFlags currentFlags = 0;
+    for (size_t i = 0; i < modifierCount; i++) {
+        if (flags & modifierKeys[i].flag) {
+            currentFlags |= modifierKeys[i].flag;
+            [self postKeyboardEventForKeyCode:modifierKeys[i].keyCode keyDown:YES flags:currentFlags];
+        }
+    }
+
+    [self postKeyboardEventForKeyCode:keyCode keyDown:YES flags:currentFlags];
+    [self postKeyboardEventForKeyCode:keyCode keyDown:NO flags:currentFlags];
+
+    for (size_t i = modifierCount; i-- > 0;) {
+        if (flags & modifierKeys[i].flag) {
+            currentFlags &= ~modifierKeys[i].flag;
+            [self postKeyboardEventForKeyCode:modifierKeys[i].keyCode keyDown:NO flags:currentFlags];
+        }
+    }
+}
+
 - (void)performShortcutSequenceSpec:(NSString *)shortcutSequenceSpec {
     NSString *normalized = [[shortcutSequenceSpec stringByReplacingOccurrencesOfString:@";" withString:@","]
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];

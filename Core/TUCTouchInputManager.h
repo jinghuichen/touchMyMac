@@ -116,7 +116,11 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)triggerSystemAccessibilityAccessAlert;
 
-- (void)performShortcutChordSpec:(NSString *)shortcutSpec;
+/**
+ Presses and releases a single key, wrapped in key events for the modifiers in `flags`
+ (control, option, shift, command).
+ */
+- (void)performKeyCode:(CGKeyCode)keyCode modifierFlags:(CGEventFlags)flags;
 
 @end
 

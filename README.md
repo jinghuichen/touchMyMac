@@ -44,13 +44,13 @@ The Settings window lets you customize:
 
 ## Floating Keyboard
 
-The built-in floating keyboard is designed for occasional touchscreen text entry on macOS.
+The built-in floating keyboard is designed for touchscreen text entry on macOS.
 
-- Movable and closable panel
-- Letter layout plus a symbol layer
-- Shift, space, delete, and return
-- Triggered by four-finger swipe up
-- Hidden by four-finger swipe down
+- Full Mac (US ANSI) layout with number row, symbols, and arrow keys
+- Keys fire on touch down, and overlapping fingers each type their own key, so fast typing doesn't drop letters
+- Sticky shift, control, option, and command for shortcuts like ⌘C, plus caps lock
+- Delete, space, and arrow keys repeat while held
+- Triggered by four-finger swipe up; hidden by four-finger swipe down or the hide key
 
 ## Requirements
 
