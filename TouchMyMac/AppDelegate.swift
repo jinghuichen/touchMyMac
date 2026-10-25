@@ -643,7 +643,9 @@ class FloatingKeyboardPanel: NSPanel {
         isFloatingPanel = true
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
-        level = .floating
+        // The level macOS reserves for on-screen keyboards, so the panel stays above
+        // other apps' floating windows and this app's own settings window.
+        level = NSWindow.Level(Int(CGWindowLevelForKey(.assistiveTechHighWindow)))
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         standardWindowButton(.miniaturizeButton)?.isHidden = true
         standardWindowButton(.zoomButton)?.isHidden = true
