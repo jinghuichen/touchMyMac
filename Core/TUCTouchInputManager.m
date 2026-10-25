@@ -24,6 +24,13 @@
 @property CGPoint cursorTouchStartLocation;
 @property TUCCursorAction lastPerformedAction;
 @property BOOL suppressEndedPrimaryTouchAction;
+@property BOOL cursorTouchStoppedMomentum; // the touch landed during inertia, so lifting it is not a click
+
+// A touch session lasts from the first finger landing until all fingers lifted.
+@property NSInteger sessionMaxTouchCount;
+@property BOOL twoFingerTapPossible; // two fingers, both still close to where they landed
+@property BOOL pendingTwoFingerTap; // the cursor finger lifted first; waiting for the second one
+@property CGPoint pendingTwoFingerTapLocation;
 
 @property CGFloat pinchDistance;
 @property BOOL hasLastScrollLocation;
@@ -80,6 +87,7 @@ static const CGFloat kFourFingerSwipeMaxHorizontalTravelMM = 18.0f;
 static const NSTimeInterval kFiveFingerHoldActivationDuration = 0.25;
 static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
+static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
 #pragma mark   Start & Stop
 
@@ -141,15 +149,18 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         }
     }
     
-    if ([[self activeTouches] count] == 0) {
-        [self stopCurrentGesture];
-    }
-    
     ++self.currentFrameID;
     self.debugProcessFrameID = self.currentFrameID;
     self.debugActiveTouchCount = (NSInteger)[[self activeTouches] count];
-    
+
+    // Process before tearing the gesture down, so a liftoff still sees the gesture it ends
+    // (e.g. the final scroll frame that hands over to inertia).
     [self processTouchesForCursorInput];
+
+    if ([[self activeTouches] count] == 0) {
+        [self stopCurrentGesture];
+    }
+    [self finishPendingTwoFingerTapIfNeeded];
     [self.delegate inputDiagnosticsDidChange];
     
 }
@@ -194,6 +205,7 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
     }
 
     if (didChange) {
+        [self finishPendingTwoFingerTapIfNeeded];
         [self.delegate touchesDidChange];
     }
 }
@@ -329,6 +341,7 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
 - (void)stopCurrentGesture {
     [[TUCCursorUtilities sharedInstance] stopDraggingCursor];
     [[TUCCursorUtilities sharedInstance] stopMagnifying];
+    [[TUCCursorUtilities sharedInstance] endScrollGesture];
     self.hasLastScrollLocation = NO;
     self.lastPerformedAction = TUCCursorActionNone;
     self.suppressEndedPrimaryTouchAction = NO;
@@ -381,9 +394,16 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         self.cursorTouchBeganDate = [NSDate date];
         self.cursorTouchStartLocation = point;
         self.gestureAdditionalTouch = nil;
+        self.sessionMaxTouchCount = 1;
+        self.twoFingerTapPossible = YES;
+        self.pendingTwoFingerTap = NO;
+        self.cursorTouchStoppedMomentum = [TUCCursorUtilities sharedInstance].isMomentumScrolling;
     }
-    
+
     [touch setLocation: point];
+    if (isNewTouch) {
+        touch.initialLocation = point;
+    }
     [touch setIsOnSurface:isOnSurface];
     [touch setConfidenceFlag:confidenceFlag];
     [touch setLastUpdated:self.currentFrameID];
@@ -481,7 +501,18 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
     
     NSArray<TUCTouch *> *touches = [[self activeTouches] allObjects];
     NSTouchPhase phase = cursorTouch.phase;
-    
+
+    if ((NSInteger)touches.count > self.sessionMaxTouchCount) {
+        self.sessionMaxTouchCount = touches.count;
+        if (touches.count >= 2 && self.lastPerformedAction != TUCCursorActionDrag) {
+            // A second finger means this is not a one-finger hold-and-drag.
+            self.cursorTouchDidHold = NO;
+        }
+    }
+    if (self.twoFingerTapPossible) {
+        self.twoFingerTapPossible = touches.count <= 2 && ![self anyTouchMovedFromInitialLocation:touches];
+    }
+
     // Hard guard against a latched multi-touch gesture when contacts go stale.
     if (self.identifiedMultitouchGesture == TUCCursorGesturePinch) {
         BOOL hasTwoTouches = [touches count] >= 2;
@@ -660,13 +691,16 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         if (self.cursorTouchStationarySinceDate != nil) {
             holdDuration = [[NSDate date] timeIntervalSinceDate:self.cursorTouchStationarySinceDate];
         }
-        if (self.cursorTouchQualifiedForTap && holdDuration > self.holdDuration) {
+        if (self.cursorTouchQualifiedForTap && holdDuration > self.holdDuration && self.sessionMaxTouchCount < 2) {
             // the user left the finger on the screen for the min duration required to produce a hold
             self.cursorTouchDidHold = YES;
         }
-        
-        [self checkForSecondaryClick];
-        
+
+        if (self.lastPerformedAction == TUCCursorActionScroll) {
+            // Report the pause to the scroll, so lifting a finger that stopped doesn't fling.
+            [self performMouseEventForGesture:TUCCursorGestureDrag];
+        }
+
         return;
     }
     
@@ -675,10 +709,24 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         CGFloat movementMM = [self cursorTouchDistanceFromStartMM];
         NSTimeInterval touchDuration = self.cursorTouchBeganDate == nil ? 0 : [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate];
         BOOL shortTouchWithSmallTravel = touchDuration <= kTapFallbackDuration && movementMM <= kTapFallbackDistanceMM;
-        // Only interpret liftoff as a tap when no other fingers are still active.
-        BOOL noOtherActiveTouches = touches.count == 0;
+        // Only a single finger on its own can be a tap.
+        BOOL noOtherActiveTouches = touches.count == 0 && self.sessionMaxTouchCount < 2;
         BOOL shouldTreatAsTap = noOtherActiveTouches && (self.cursorTouchQualifiedForTap || shortTouchWithSmallTravel);
         BOOL suppressEndedAction = self.suppressEndedPrimaryTouchAction;
+
+        if (!suppressEndedAction && self.sessionMaxTouchCount == 2 && self.twoFingerTapPossible) {
+            CGPoint location = [self convertScreenPointRelativeToAbsolute:cursorTouch.location];
+            [self stopCurrentGesture];
+            if (touches.count == 0) {
+                [self performTwoFingerTapAt:location];
+            } else {
+                // The cursor finger lifted first; the tap completes when the other finger lifts.
+                self.pendingTwoFingerTap = YES;
+                self.pendingTwoFingerTapLocation = location;
+            }
+            self.cursorTouch = nil;
+            return;
+        }
         TUCCursorGesture completedMultitouchGesture = self.identifiedMultitouchGesture;
         
         if (!suppressEndedAction && completedMultitouchGesture == _TUCCursorGestureNone ) {
@@ -693,7 +741,7 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         
         [self stopCurrentGesture];
         
-        if (!suppressEndedAction && shouldTreatAsTap) {
+        if (!suppressEndedAction && shouldTreatAsTap && !self.cursorTouchStoppedMomentum) {
             [self performMouseEventForGesture:TUCCursorGestureTap];
         }
 
@@ -709,10 +757,6 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         return;
     }
     
-    if ([self checkForSecondaryClick]) {
-        return;
-    }
-
     // If a two-finger gesture ended but one finger remains, clear the old gesture state.
     if (self.identifiedMultitouchGesture != _TUCCursorGestureNone
         && (self.gestureAdditionalTouch == nil || !self.gestureAdditionalTouch.isActive)) {
@@ -728,28 +772,16 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         // Keep reference in sync every frame to avoid stale pointer causing pinch latch.
         self.gestureAdditionalTouch = otherTouch;
 
-        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone ) {
-            if (self.gestureAdditionalTouch.isActive) {
-                CGPoint trajectoryA = [cursorTouch trajectorySign];
-                CGPoint trajectoryB = [otherTouch trajectorySign];
-                
-                
-                if (   !CGPointEqualToPoint(trajectoryA, CGPointZero)
-                    && !CGPointEqualToPoint(trajectoryB, CGPointZero)) {
-                    
-                    if (!CGPointEqualToPoint(trajectoryA, trajectoryB)) {
-                        self.identifiedMultitouchGesture = TUCCursorGesturePinch;
-                    }
-//                    else {
-//                        self.identifiedMultitouchGesture = TUCCursorGestureTwoFingerDrag;
-//                    }
-                }
-                
-            } else {
-                // secondary click
-                [self removeTouch:self.gestureAdditionalTouch now:YES];
-                self.gestureAdditionalTouch = nil;
-                [self performMouseEventForGesture:TUCCursorGestureTapSecondFinger];
+        // While both fingers rest where they landed this may still be a two-finger tap,
+        // so finger jitter must not start a pinch.
+        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone && !self.twoFingerTapPossible) {
+            CGPoint trajectoryA = [cursorTouch trajectorySign];
+            CGPoint trajectoryB = [otherTouch trajectorySign];
+
+            if (   !CGPointEqualToPoint(trajectoryA, CGPointZero)
+                && !CGPointEqualToPoint(trajectoryB, CGPointZero)
+                && !CGPointEqualToPoint(trajectoryA, trajectoryB)) {
+                self.identifiedMultitouchGesture = TUCCursorGesturePinch;
             }
         }
         
@@ -766,7 +798,10 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         }
         
     }
-    
+
+    if (self.sessionMaxTouchCount >= 2 && self.twoFingerTapPossible) {
+        return;
+    }
 
     if (self.cursorTouchDidHold) {
         [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
@@ -780,47 +815,47 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
 }
 
 
-- (BOOL)checkForSecondaryClick {
-//    if (self.identifiedMultitouchGesture != _TUCCursorGestureNone) {
-//        return NO;
-//    }
+#pragma mark - Two-Finger Tap
 
-    if (self.cursorTouch == nil || self.cursorTouchBeganDate == nil) {
-        return NO;
-    }
-    
-    NSSet<TUCTouch *> *touchesInProximity = [self touchesInProximityTo:self.cursorTouch.location maxDistance:60];
-    if (touchesInProximity.count >= 2 && self.identifiedMultitouchGesture == _TUCCursorGestureNone) {
-
-        // TUCCursorGestureTwoFingerTap
-        NSPredicate *p1 = [NSPredicate predicateWithFormat:@"phase == %d", NSTouchPhaseEnded];
-        NSPredicate *p2 = [NSPredicate predicateWithFormat:@"phase == %d", NSTouchPhaseCancelled];
-
-        NSPredicate *p3 = [NSPredicate predicateWithFormat:@"contactID != %d", self.cursorTouch.contactID];
-
-        NSPredicate *p4 = [NSCompoundPredicate orPredicateWithSubpredicates:@[p1, p2]];
-        NSPredicate *p5 = [NSCompoundPredicate andPredicateWithSubpredicates:@[p3, p4]];
-
-        NSPredicate *p6 = [NSPredicate predicateWithBlock:^BOOL(TUCTouch *touch, NSDictionary *bindings) {
-            NSDate *lastUpdatedAt = touch.lastUpdatedAt;
-            if (lastUpdatedAt == nil) {
-                return NO;
-            }
-            return [lastUpdatedAt compare:self.cursorTouchBeganDate] != NSOrderedAscending;
-        }];
-
-        NSSet<TUCTouch *> *endedTouches = [touchesInProximity filteredSetUsingPredicate:[NSCompoundPredicate andPredicateWithSubpredicates:@[p5, p6]]];
-
-        if (endedTouches.count == 1) {
-            for (TUCTouch* touchToRemove in endedTouches) {
-                [self removeTouch:touchToRemove now:YES];
-            }
-
-            [self performMouseEventForGesture:TUCCursorGestureTapSecondFinger];
+- (BOOL)anyTouchMovedFromInitialLocation:(NSArray<TUCTouch *> *)touches {
+    for (TUCTouch *touch in touches) {
+        if ([self distanceMMFromPoint:touch.location toPoint:touch.initialLocation] > kTapCancelDistanceMM) {
             return YES;
         }
     }
     return NO;
+}
+
+/**
+ Two fingers that land and lift without moving make a secondary click, like a tap on a Mac trackpad.
+ The tap must finish within `kTwoFingerTapMaxDuration` of the first finger landing.
+ */
+- (void)performTwoFingerTapAt:(CGPoint)screenLocation {
+    NSTimeInterval duration = self.cursorTouchBeganDate == nil ? 0 : [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate];
+    if (duration > kTwoFingerTapMaxDuration) {
+        return;
+    }
+    if ([self actionForGesture:TUCCursorGestureTapSecondFinger] == TUCCursorActionSecondaryClick) {
+        [[TUCCursorUtilities sharedInstance] performSecondaryClickAt:screenLocation];
+    }
+}
+
+- (void)finishPendingTwoFingerTapIfNeeded {
+    if (!self.pendingTwoFingerTap) {
+        return;
+    }
+
+    NSArray<TUCTouch *> *touches = [[self activeTouches] allObjects];
+    if ([self anyTouchMovedFromInitialLocation:touches]) {
+        self.pendingTwoFingerTap = NO;
+        return;
+    }
+    if (touches.count > 0) {
+        return;
+    }
+
+    self.pendingTwoFingerTap = NO;
+    [self performTwoFingerTapAt:self.pendingTwoFingerTapLocation];
 }
 
 
@@ -844,6 +879,7 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
         }
         if (previousAction == TUCCursorActionScroll) {
             self.hasLastScrollLocation = NO;
+            [utils endScrollGesture];
         }
         if (previousAction == TUCCursorActionKeyboardShortcutHold) {
             [utils endHeldShortcut];
@@ -986,37 +1022,6 @@ static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
 }
 
 
-
-- (CGFloat)distanceBetweenPoint:(CGPoint)p1 and:(CGPoint)p2 {
-    CGFloat dx = p1.x - p2.x;
-    CGFloat dy = p1.y - p2.y;
-    
-    return sqrt( pow(dx, 2) + pow(dy, 2) );
-}
-
-
-/**
- maxDistance in mm
- */
-- (NSSet<TUCTouch *> *)touchesInProximityTo:(CGPoint)point maxDistance:(CGFloat)mmDistance {
-    
-    CGFloat screenDistance = mmDistance * [[self touchscreen] pixelsPerMM];
-    CGPoint distance = CGPointMake(screenDistance /  [self touchscreen].frame.size.width,
-                                   screenDistance /  [self touchscreen].frame.size.height);
-    
-    NSPredicate * predicate = [NSPredicate predicateWithBlock: ^BOOL(TUCTouch *t, NSDictionary *bind) {
-        if (t.isClaimed) {
-            return NO;
-        }
-
-        CGFloat dx = [t location].x - point.x;
-        CGFloat dy = [t location].y - point.y;
-        
-        return sqrt( pow(dx, 2) + pow(dy, 2) ) < distance.x;
-    }];
-    
-    return [self.touchSet filteredSetUsingPredicate:predicate];
-}
 
 
 /**

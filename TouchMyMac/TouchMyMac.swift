@@ -692,7 +692,7 @@ extension TouchMyMac {
             
         case \.isSecondaryClickEnabled:
             return("Secondary Click",
-                   "While your pointing finger is resting on the screen, tap another finger in proximity to it to generate a secondary click event at the location of the first finger.")
+                   "Tap the screen with two fingers at once to secondary click at the first finger, like on a Mac trackpad.")
             
         case \.isMagnificationEnabled:
             return("Magnification",
