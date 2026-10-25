@@ -22,10 +22,20 @@
 
 @property BOOL isScrollGestureActive;
 @property CGPoint scrollRemainder; // sub-pixel part of the deltas, carried into the next event
+@property CGPoint fingerScrollPosition; // total finger travel in this scroll gesture
+@property CGPoint scrollOutputPosition; // total travel already posted
+// The two latest finger reports, used to resample the finger path at display frame times.
+@property CFTimeInterval scrollPathTime0;
+@property CFTimeInterval scrollPathTime1;
+@property CGPoint scrollPathPosition0;
+@property CGPoint scrollPathPosition1;
+@property CFTimeInterval reportInterval; // running estimate of the time between touch reports
 
+@property BOOL isMomentumActive;
 @property CGPoint momentumScrollVelocity;
 @property CFTimeInterval momentumLastTickTime;
-@property (strong, nullable) id momentumDriver; // CADisplayLink, or NSTimer before macOS 14
+
+@property (strong, nullable) id frameDriver; // CADisplayLink, or NSTimer before macOS 14
 
 @property BOOL isMagnifying;
 @property CGFloat lastPinchDistance;
@@ -45,7 +55,8 @@
 }
 
 static const NSTimeInterval kMomentumTickInterval = 1.0 / 60.0; // the "frame" that deceleration settings refer to
-static const NSTimeInterval kMomentumFallbackTickInterval = 1.0 / 120.0;
+static const NSTimeInterval kFallbackFrameInterval = 1.0 / 120.0;
+static const CFTimeInterval kDefaultReportInterval = 1.0 / 100.0;
 static const CFTimeInterval kScrollVelocityWindow = 0.08; // seconds of movement that determine the fling velocity
 static const CGFloat kDefaultMomentumVelocityStopThreshold = 5.0;     // px/s
 static const CGFloat kDefaultMomentumStartThreshold = 120.0;          // px/s
@@ -67,6 +78,7 @@ static const useconds_t kShortcutSequenceStepDelayMicroseconds = 30000;
             sharedInstance.cursorClickCount = 0;
             sharedInstance.timeOfLastClick = [NSDate dateWithTimeIntervalSince1970:0];
             sharedInstance.locationOfLastClick = CGPointZero;
+            sharedInstance.reportInterval = kDefaultReportInterval;
             sharedInstance.momentumScrollVelocity = CGPointZero;
             sharedInstance.momentumLastTickTime = 0;
             sharedInstance.momentumScrollEnabled = YES;
@@ -307,6 +319,14 @@ static inline CGFloat TUCLength(CGPoint v) {
     return (CGFloat)sqrt((double)(v.x * v.x + v.y * v.y));
 }
 
+static inline CGPoint TUCPointAdd(CGPoint a, CGPoint b) {
+    return CGPointMake(a.x + b.x, a.y + b.y);
+}
+
+static inline CGPoint TUCPointSubtract(CGPoint a, CGPoint b) {
+    return CGPointMake(a.x - b.x, a.y - b.y);
+}
+
 static inline CGPoint TUCPointScale(CGPoint p, CGFloat s) {
     return CGPointMake(p.x * s, p.y * s);
 }
@@ -448,9 +468,18 @@ static inline CFTimeInterval TUCNowSeconds(void) {
         self.isScrollGestureActive = YES;
         self.scrollRemainder = CGPointZero;
         _scrollSampleCount = 0;
+        self.fingerScrollPosition = translation;
+        self.scrollOutputPosition = translation;
+        self.scrollPathTime0 = now;
+        self.scrollPathTime1 = now;
+        self.scrollPathPosition0 = translation;
+        self.scrollPathPosition1 = translation;
         [self postScrollDelta:translation scrollPhase:kCGScrollPhaseBegan momentumPhase:kCGMomentumScrollPhaseNone];
+        [self startFrameDriver];
     } else {
-        [self postScrollDelta:translation scrollPhase:kCGScrollPhaseChanged momentumPhase:kCGMomentumScrollPhaseNone];
+        // Posted on the next display frames by `advanceScrollOutput`, not right away.
+        self.fingerScrollPosition = TUCPointAdd(self.fingerScrollPosition, translation);
+        [self appendScrollPathPosition:self.fingerScrollPosition at:now];
     }
     // Stationary frames record zero movement, so a finger that stops before lifting doesn't fling.
     // A movement-free liftoff is skipped: on screens without liftoff reports it arrives only after a
@@ -463,8 +492,7 @@ static inline CFTimeInterval TUCNowSeconds(void) {
         return;
     }
 
-    [self postScrollDelta:CGPointZero scrollPhase:kCGScrollPhaseEnded momentumPhase:kCGMomentumScrollPhaseNone];
-    self.isScrollGestureActive = NO;
+    [self endScrollGesture];
 
     CGPoint velocity = [self releaseVelocity];
     if (!self.momentumScrollEnabled || phase == NSTouchPhaseCancelled || TUCLength(velocity) < self.momentumStartThreshold) {
@@ -477,8 +505,50 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     if (!self.isScrollGestureActive) {
         return;
     }
+    // Catch up with the finger, then end.
+    [self postScrollDelta:TUCPointSubtract(self.fingerScrollPosition, self.scrollOutputPosition)
+              scrollPhase:kCGScrollPhaseChanged
+            momentumPhase:kCGMomentumScrollPhaseNone];
+    self.scrollOutputPosition = self.fingerScrollPosition;
     [self postScrollDelta:CGPointZero scrollPhase:kCGScrollPhaseEnded momentumPhase:kCGMomentumScrollPhaseNone];
     self.isScrollGestureActive = NO;
+}
+
+- (void)appendScrollPathPosition:(CGPoint)position at:(CFTimeInterval)time {
+    CFTimeInterval interval = time - self.scrollPathTime1;
+    if (interval > 0.002 && interval < 0.05) {
+        self.reportInterval = self.reportInterval * 0.8 + interval * 0.2;
+    }
+    self.scrollPathTime0 = self.scrollPathTime1;
+    self.scrollPathPosition0 = self.scrollPathPosition1;
+    self.scrollPathTime1 = time;
+    self.scrollPathPosition1 = position;
+}
+
+- (CGPoint)scrollPathPositionAt:(CFTimeInterval)time {
+    if (time >= self.scrollPathTime1) {
+        return self.scrollPathPosition1;
+    }
+    CFTimeInterval span = self.scrollPathTime1 - self.scrollPathTime0;
+    if (time <= self.scrollPathTime0 || span <= 0) {
+        return self.scrollPathPosition0;
+    }
+    CGFloat t = (CGFloat)((time - self.scrollPathTime0) / span);
+    CGPoint p0 = self.scrollPathPosition0;
+    CGPoint p1 = self.scrollPathPosition1;
+    return CGPointMake(p0.x + (p1.x - p0.x) * t, p0.y + (p1.y - p0.y) * t);
+}
+
+/**
+ Touch reports and display frames run at different rates, so posting each report as it arrives moves
+ the content unevenly from frame to frame. Instead, each frame shows where the finger was one report
+ interval ago, interpolated between the two latest reports, which moves evenly at the cost of that delay.
+ */
+- (void)advanceScrollOutput {
+    CGPoint target = [self scrollPathPositionAt:TUCNowSeconds() - self.reportInterval];
+    CGPoint delta = TUCPointSubtract(target, self.scrollOutputPosition);
+    self.scrollOutputPosition = target;
+    [self postScrollDelta:delta scrollPhase:kCGScrollPhaseChanged momentumPhase:kCGMomentumScrollPhaseNone];
 }
 
 - (void)recordScrollSample:(CGPoint)delta at:(CFTimeInterval)time {
@@ -525,46 +595,20 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 #pragma mark Inertia
 
 - (BOOL)isMomentumScrolling {
-    return self.momentumDriver != nil;
+    return self.isMomentumActive;
 }
 
 - (void)startMomentumWithVelocity:(CGPoint)velocity at:(CFTimeInterval)now {
     [self cancelMomentumScroll];
 
+    self.isMomentumActive = YES;
     self.momentumScrollVelocity = velocity;
     self.momentumLastTickTime = now;
     [self postScrollDelta:CGPointZero scrollPhase:0 momentumPhase:kCGMomentumScrollPhaseBegin];
-
-    // Drive inertia from the display refresh so every frame gets exactly one scroll step.
-    if (@available(macOS 14.0, *)) {
-        NSScreen *screen = [self screenUnderCursor] ?: [NSScreen mainScreen];
-        CADisplayLink *displayLink = [screen displayLinkWithTarget:self selector:@selector(updateMomentumScroll:)];
-        [displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-        self.momentumDriver = displayLink;
-    } else {
-        NSTimer *timer = [NSTimer timerWithTimeInterval:kMomentumFallbackTickInterval
-                                                 target:self
-                                               selector:@selector(updateMomentumScroll:)
-                                               userInfo:nil
-                                                repeats:YES];
-        [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
-        self.momentumDriver = timer;
-    }
+    [self startFrameDriver];
 }
 
-- (nullable NSScreen *)screenUnderCursor {
-    CGPoint cursor = [self currentCursorLocation];
-    CGFloat primaryHeight = NSMaxY([[NSScreen screens] firstObject].frame);
-    NSPoint cocoaPoint = NSMakePoint(cursor.x, primaryHeight - cursor.y);
-    for (NSScreen *screen in [NSScreen screens]) {
-        if (NSPointInRect(cocoaPoint, screen.frame)) {
-            return screen;
-        }
-    }
-    return nil;
-}
-
-- (void)updateMomentumScroll:(id)sender {
+- (void)advanceMomentum {
     if (!self.momentumScrollEnabled) {
         [self cancelMomentumScroll];
         return;
@@ -592,9 +636,8 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 }
 
 - (void)cancelMomentumScroll {
-    if (self.momentumDriver != nil) {
-        [self.momentumDriver invalidate];
-        self.momentumDriver = nil;
+    if (self.isMomentumActive) {
+        self.isMomentumActive = NO;
         // Tell apps the inertia is over, e.g. when a new touch stops it.
         [self postScrollDelta:CGPointZero scrollPhase:0 momentumPhase:kCGMomentumScrollPhaseEnd];
     }
@@ -602,6 +645,56 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     self.momentumLastTickTime = 0;
 }
 
+
+#pragma mark Display Frames
+
+/**
+ Finger scrolling and inertia both post one step per display frame, driven from the refresh
+ of the screen the cursor (and so the touch) is on. The driver stops once neither is running.
+ */
+- (void)startFrameDriver {
+    if (self.frameDriver != nil) {
+        return;
+    }
+
+    if (@available(macOS 14.0, *)) {
+        NSScreen *screen = [self screenUnderCursor] ?: [NSScreen mainScreen];
+        CADisplayLink *displayLink = [screen displayLinkWithTarget:self selector:@selector(frameTick:)];
+        [displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        self.frameDriver = displayLink;
+    } else {
+        NSTimer *timer = [NSTimer timerWithTimeInterval:kFallbackFrameInterval
+                                                 target:self
+                                               selector:@selector(frameTick:)
+                                               userInfo:nil
+                                                repeats:YES];
+        [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
+        self.frameDriver = timer;
+    }
+}
+
+- (void)frameTick:(id)sender {
+    if (self.isScrollGestureActive) {
+        [self advanceScrollOutput];
+    } else if (self.isMomentumActive) {
+        [self advanceMomentum];
+    } else {
+        [self.frameDriver invalidate];
+        self.frameDriver = nil;
+    }
+}
+
+- (nullable NSScreen *)screenUnderCursor {
+    CGPoint cursor = [self currentCursorLocation];
+    CGFloat primaryHeight = NSMaxY([[NSScreen screens] firstObject].frame);
+    NSPoint cocoaPoint = NSMakePoint(cursor.x, primaryHeight - cursor.y);
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSPointInRect(cocoaPoint, screen.frame)) {
+            return screen;
+        }
+    }
+    return nil;
+}
 
 
 - (void)magnify:(CGFloat)magnification phase:(NSTouchPhase)phase {

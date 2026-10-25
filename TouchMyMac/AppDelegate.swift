@@ -132,8 +132,10 @@ class SettingsWindow: NSWindow {
         window.title = "TouchMyMac Settings"
         window.tabbingMode = .disallowed
         window.model = model
-        window.level = .popUpMenu
-        window.collectionBehavior = [.canJoinAllSpaces, .transient]
+        // A regular window: it goes behind other apps once you click elsewhere,
+        // and the menu bar item brings it back to the current Space.
+        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace]
         
         let windowController = NSWindowController(window: window)
         
