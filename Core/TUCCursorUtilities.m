@@ -35,6 +35,9 @@
 @property CGPoint scrollPathPosition0;
 @property CGPoint scrollPathPosition1;
 @property CFTimeInterval reportInterval; // running estimate of the time between touch reports
+@property BOOL isCoasting; // reports stopped mid-scroll; the content keeps moving at `coastVelocity`
+@property BOOL isResumingAfterCoast; // reports came back; wait for the finger to catch up with the coasted content
+@property CGPoint coastVelocity;
 
 @property BOOL isMomentumActive;
 @property CGPoint momentumScrollVelocity;
@@ -65,9 +68,14 @@ static const CFTimeInterval kDefaultReportInterval = 1.0 / 100.0;
 // One Euro filter settings for the finger path: cutoff frequency at rest (Hz), how fast the cutoff
 // rises with finger speed (Hz per px/s), and the cutoff used to smooth the speed estimate itself.
 static const CGFloat kScrollFilterMinCutoff = 3.0;
-static const CGFloat kScrollFilterBeta = 0.03;
-static const CGFloat kScrollFilterSpeedCutoff = 1.0;
-static const CFTimeInterval kScrollVelocityWindow = 0.08; // seconds of movement that determine the fling velocity
+static const CGFloat kScrollFilterBeta = 0.06;
+static const CGFloat kScrollFilterSpeedCutoff = 8.0;
+// Release velocity, as in Android's VelocityTracker: a quadratic least-squares fit over the last 100 ms,
+// and zero if the finger had not moved for 40 ms before lifting.
+static const CFTimeInterval kScrollVelocityHorizon = 0.1;
+static const CFTimeInterval kScrollAssumeStoppedTime = 0.04;
+// When touch reports stop for this many report intervals, keep the content moving (see `advanceScrollOutput`).
+static const CFTimeInterval kScrollCoastAfterReportIntervals = 3.0;
 static const CGFloat kDefaultMomentumVelocityStopThreshold = 5.0;     // px/s
 static const CGFloat kDefaultMomentumStartThreshold = 120.0;          // px/s
 static const CGFloat kDefaultMomentumDecelerationPerFrame = 0.95;     // 60Hz
@@ -325,6 +333,8 @@ static const useconds_t kShortcutSequenceStepDelayMicroseconds = 30000;
     CFRelease(event);
 }
 
+static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger n);
+
 static inline CGFloat TUCLength(CGPoint v) {
     return (CGFloat)sqrt((double)(v.x * v.x + v.y * v.y));
 }
@@ -494,6 +504,8 @@ static inline CFTimeInterval TUCNowSeconds(void) {
         self.scrollPathTime1 = now;
         self.scrollPathPosition0 = translation;
         self.scrollPathPosition1 = translation;
+        self.isCoasting = NO;
+        self.isResumingAfterCoast = NO;
         [self postScrollDelta:translation scrollPhase:kCGScrollPhaseBegan momentumPhase:kCGMomentumScrollPhaseNone];
         [self startFrameDriver];
     } else {
@@ -512,26 +524,36 @@ static inline CFTimeInterval TUCNowSeconds(void) {
         return;
     }
 
-    [self endScrollGesture];
+    CGPoint velocity = self.isCoasting ? self.coastVelocity : [self releaseVelocity];
+    BOOL startsMomentum = self.momentumScrollEnabled && phase != NSTouchPhaseCancelled
+        && TUCLength(velocity) >= self.momentumStartThreshold;
 
-    CGPoint velocity = [self releaseVelocity];
-    if (!self.momentumScrollEnabled || phase == NSTouchPhaseCancelled || TUCLength(velocity) < self.momentumStartThreshold) {
-        return;
+    // Inertia carries on from where the content is now. Catching up with the finger first would jump.
+    [self endScrollGestureCatchingUp:!startsMomentum];
+    if (startsMomentum) {
+        // Starts at the release velocity so the speed doesn't change at liftoff, like a trackpad.
+        [self startMomentumWithVelocity:velocity at:now];
     }
-    [self startMomentumWithVelocity:TUCPointScale(velocity, self.momentumVelocityMultiplier) at:now];
 }
 
 - (void)endScrollGesture {
+    [self endScrollGestureCatchingUp:YES];
+}
+
+- (void)endScrollGestureCatchingUp:(BOOL)catchUp {
     if (!self.isScrollGestureActive) {
         return;
     }
-    // Catch up with the (smoothed) finger, then end.
-    [self postScrollDelta:TUCPointSubtract(self.scrollPathPosition1, self.scrollOutputPosition)
-              scrollPhase:kCGScrollPhaseChanged
-            momentumPhase:kCGMomentumScrollPhaseNone];
-    self.scrollOutputPosition = self.scrollPathPosition1;
+    if (catchUp) {
+        [self postScrollDelta:TUCPointSubtract(self.scrollPathPosition1, self.scrollOutputPosition)
+                  scrollPhase:kCGScrollPhaseChanged
+                momentumPhase:kCGMomentumScrollPhaseNone];
+        self.scrollOutputPosition = self.scrollPathPosition1;
+    }
     [self postScrollDelta:CGPointZero scrollPhase:kCGScrollPhaseEnded momentumPhase:kCGMomentumScrollPhaseNone];
     self.isScrollGestureActive = NO;
+    self.isCoasting = NO;
+    self.isResumingAfterCoast = NO;
 }
 
 /**
@@ -565,6 +587,11 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     self.scrollPathPosition0 = self.scrollPathPosition1;
     self.scrollPathTime1 = time;
     self.scrollPathPosition1 = position;
+
+    if (self.isCoasting) {
+        self.isCoasting = NO;
+        self.isResumingAfterCoast = YES;
+    }
 }
 
 - (CGPoint)scrollPathPositionAt:(CFTimeInterval)time {
@@ -587,8 +614,36 @@ static inline CFTimeInterval TUCNowSeconds(void) {
  interval ago, interpolated between the two latest reports, which moves evenly at the cost of that delay.
  */
 - (void)advanceScrollOutput {
-    CGPoint target = [self scrollPathPositionAt:TUCNowSeconds() - self.reportInterval];
+    CFTimeInterval now = TUCNowSeconds();
+    CFTimeInterval sampleTime = now - self.reportInterval;
+    CFTimeInterval sinceLastReport = now - self.scrollPathTime1;
+
+    // Some screens report a liftoff only after a timeout, so the reports just stop. Rather than freezing
+    // until then and jumping into inertia, keep moving at the release velocity: inertia then continues at
+    // the same speed. If the reports come back, the finger was still there and takes over again.
+    if (!self.isCoasting && sinceLastReport > kScrollCoastAfterReportIntervals * self.reportInterval) {
+        CGPoint velocity = [self releaseVelocity];
+        if (self.momentumScrollEnabled && TUCLength(velocity) >= self.momentumStartThreshold) {
+            self.isCoasting = YES;
+            self.coastVelocity = velocity;
+        }
+    }
+
+    CGPoint target;
+    if (self.isCoasting && sampleTime > self.scrollPathTime1) {
+        target = TUCPointAdd(self.scrollPathPosition1, TUCPointScale(self.coastVelocity, (CGFloat)(sampleTime - self.scrollPathTime1)));
+    } else {
+        target = [self scrollPathPositionAt:sampleTime];
+    }
+
     CGPoint delta = TUCPointSubtract(target, self.scrollOutputPosition);
+    if (self.isResumingAfterCoast) {
+        // The content coasted ahead of the finger. Hold still until the finger catches up instead of moving back.
+        if (delta.x * self.coastVelocity.x + delta.y * self.coastVelocity.y < 0) {
+            return;
+        }
+        self.isResumingAfterCoast = NO;
+    }
     self.scrollOutputPosition = target;
     [self postScrollDelta:delta scrollPhase:kCGScrollPhaseChanged momentumPhase:kCGMomentumScrollPhaseNone];
 }
@@ -605,32 +660,72 @@ static inline CFTimeInterval TUCNowSeconds(void) {
 }
 
 /**
- Average velocity (px/s) over the last `kScrollVelocityWindow` of samples. Measured from the last sample
- rather than from now, because screens that don't report liftoff deliver it only after a timeout.
+ Finger velocity (px/s) at the last sample, from a quadratic least-squares fit over the last
+ `kScrollVelocityHorizon`, like Android's default touch velocity tracker. A plain average over that
+ window would lag behind a finger that is still speeding up when it flicks. Measured from the last
+ sample rather than from now, because screens that don't report liftoff deliver it only after a timeout.
  */
 - (CGPoint)releaseVelocity {
-    if (_scrollSampleCount < 2) {
+    NSInteger count = _scrollSampleCount;
+    if (count < 2) {
+        return CGPointZero;
+    }
+    CFTimeInterval lastTime = _scrollSampleTimes[count - 1];
+
+    // A finger that stopped before lifting doesn't fling.
+    NSInteger lastMoving = count - 1;
+    while (lastMoving > 0 && CGPointEqualToPoint(_scrollSampleDeltas[lastMoving], CGPointZero)) {
+        lastMoving -= 1;
+    }
+    if (lastTime - _scrollSampleTimes[lastMoving] > kScrollAssumeStoppedTime) {
         return CGPointZero;
     }
 
-    CFTimeInterval lastTime = _scrollSampleTimes[_scrollSampleCount - 1];
-    NSInteger first = _scrollSampleCount - 1;
-    while (first > 0 && lastTime - _scrollSampleTimes[first - 1] <= kScrollVelocityWindow) {
+    NSInteger first = count - 1;
+    while (first > 0 && lastTime - _scrollSampleTimes[first - 1] <= kScrollVelocityHorizon) {
         first -= 1;
     }
-
-    CFTimeInterval span = lastTime - _scrollSampleTimes[first];
-    if (span < 0.005) {
+    NSInteger n = count - first;
+    if (n < 2) {
         return CGPointZero;
     }
 
-    // Each delta covers the time since the previous sample, so the first sample's own delta is outside the span.
-    CGPoint distance = CGPointZero;
-    for (NSInteger i = first + 1; i < _scrollSampleCount; i++) {
-        distance.x += _scrollSampleDeltas[i].x;
-        distance.y += _scrollSampleDeltas[i].y;
+    // Positions relative to the first sample, times relative to the last one (so the fit's slope at t = 0
+    // is the velocity we want). Each sample's delta is the movement since the previous sample.
+    double t[kScrollSampleCapacity], x[kScrollSampleCapacity], y[kScrollSampleCapacity];
+    double px = 0, py = 0;
+    for (NSInteger i = 0; i < n; i++) {
+        NSInteger index = first + i;
+        if (i > 0) {
+            px += _scrollSampleDeltas[index].x;
+            py += _scrollSampleDeltas[index].y;
+        }
+        t[i] = _scrollSampleTimes[index] - lastTime;
+        x[i] = px;
+        y[i] = py;
     }
-    return TUCPointScale(distance, (CGFloat)(1.0 / span));
+    return CGPointMake((CGFloat)TUCFitSlopeAtZero(t, x, n), (CGFloat)TUCFitSlopeAtZero(t, y, n));
+}
+
+/// Slope at t = 0 of a least-squares quadratic through (t, value), or of a line if a quadratic is ill-defined.
+static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger n) {
+    double s0 = n, s1 = 0, s2 = 0, s3 = 0, s4 = 0, v0 = 0, v1 = 0, v2 = 0;
+    for (NSInteger i = 0; i < n; i++) {
+        double ti = t[i], ti2 = ti * ti;
+        s1 += ti; s2 += ti2; s3 += ti2 * ti; s4 += ti2 * ti2;
+        v0 += value[i]; v1 += value[i] * ti; v2 += value[i] * ti2;
+    }
+
+    if (n >= 3) {
+        // Normal equations for value = a + b t + c t^2, solved for b with Cramer's rule.
+        double det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s2 * s3) + s2 * (s1 * s3 - s2 * s2);
+        if (fabs(det) > 1e-18) {
+            double detB = s0 * (v1 * s4 - s3 * v2) - v0 * (s1 * s4 - s2 * s3) + s2 * (s1 * v2 - v1 * s2);
+            return detB / det;
+        }
+    }
+    double variance = s0 * s2 - s1 * s1;
+    return fabs(variance) > 1e-18 ? (s0 * v1 - s1 * v0) / variance : 0;
 }
 
 
@@ -673,7 +768,10 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     [self postScrollDelta:TUCPointScale(v, (CGFloat)dt) scrollPhase:0 momentumPhase:kCGMomentumScrollPhaseContinue];
 
     // Exponential decay, expressed per 60Hz frame so the setting means the same at any refresh rate.
-    CGFloat decay = (CGFloat)pow(self.momentumDecelerationPerFrame, dt / kMomentumTickInterval);
+    // The velocity multiplier stretches the decay (glides further) rather than raising the start speed,
+    // so for a given multiplier the glide covers the same distance without speeding up at liftoff.
+    CGFloat glide = MAX(self.momentumVelocityMultiplier, 0.1f);
+    CGFloat decay = (CGFloat)pow(self.momentumDecelerationPerFrame, dt / kMomentumTickInterval / glide);
     self.momentumScrollVelocity = TUCPointScale(v, decay);
 }
 

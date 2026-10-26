@@ -744,7 +744,7 @@ extension TouchMyMac {
 
         case \.scrollInertiaVelocityMultiplier:
             return("Inertia Amount",
-                   "Scales the starting speed of inertial scrolling.")
+                   "Scales how far scrolling glides after you lift your finger.")
             
         default:
             return("\(keyPath)", "")

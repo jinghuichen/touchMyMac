@@ -61,7 +61,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property CGFloat scrollInertiaDecelerationPerFrame;
 
 /**
- Multiplies the initial inertial velocity at liftoff (1.0 = unchanged).
+ Scales how far inertial scrolling glides after liftoff (1.0 = unchanged).
  */
 @property CGFloat scrollInertiaVelocityMultiplier;
 
