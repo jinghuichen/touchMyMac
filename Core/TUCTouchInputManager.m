@@ -48,6 +48,9 @@
 @property NSInteger multiFingerLastCentroidCount;
 @property BOOL multiFingerGestureTriggered;
 @property BOOL claimedTouchesBecameGesture;
+// A three-finger swipe opened Mission Control and no tap has closed it yet. Four- and five-finger
+// gestures are ignored meanwhile, since showing the keyboard or firing shortcuts over it gets it stuck.
+@property BOOL missionControlMayBeOpen;
 @property CGPoint fiveFingerHoldStartCentroid;
 @property BOOL fiveFingerHoldActivated;
 @property BOOL fiveFingerHoldTracking;
@@ -723,6 +726,9 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     self.multiFingerLastCentroid = centroid;
     self.multiFingerLastCentroidCount = (NSInteger)touches.count;
 
+    if (self.gestureFingerCount >= 4 && self.missionControlMayBeOpen) {
+        return YES;
+    }
     if (self.gestureFingerCount >= 5) {
         [self processFiveFingerHoldWithTouches:touches];
         return YES;
@@ -765,6 +771,10 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
     if (gesture != _TUCCursorGestureNone) {
         self.multiFingerGestureTriggered = YES;
+        if (gesture == TUCCursorGestureThreeFingerSwipeUp) {
+            // The swipe toggles Mission Control, so a second one closes it.
+            self.missionControlMayBeOpen = !self.missionControlMayBeOpen;
+        }
         [self performMouseEventForGesture:gesture];
     }
     return YES;
@@ -818,6 +828,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         return;
     }
     if ([self actionForGesture:TUCCursorGestureTapSecondFinger] == TUCCursorActionSecondaryClick) {
+        self.missionControlMayBeOpen = NO;
         [[TUCCursorUtilities sharedInstance] performSecondaryClickAt:screenLocation];
     }
 }
@@ -892,10 +903,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
             break;
             
         case TUCCursorActionClick:
+            self.missionControlMayBeOpen = NO; // a click closes Mission Control
             [utils performClickAt:screenLocation];
             break;
             
         case TUCCursorActionSecondaryClick:
+            self.missionControlMayBeOpen = NO;
             [utils performSecondaryClickAt: screenLocation];
             break;
             
