@@ -33,7 +33,7 @@ TouchMyMac turns an external USB touchscreen into a real macOS input device. It 
 |---|---|
 | 👆 **Direct touch** | Tap to click, drag to scroll, hold and move to drag, two-finger tap for a secondary click. |
 | 🌀 **Trackpad-like scrolling** | Scrolling follows the display's refresh rate, filters out touch jitter and hands over to inertia without a pause. |
-| ⌨️ **Floating keyboard** | A full Mac layout whose keys fire on touch down, so fast, overlapping typing doesn't drop letters. |
+| ⌨️ **Floating keyboard** | A full Mac layout whose keys fire as you touch them, so fast, overlapping typing doesn't drop letters. |
 | 🖐 **Multi-finger gestures** | Mission Control, show or hide the keyboard, and configurable shortcuts on four- and five-finger gestures. |
 | 🩺 **Diagnostics** | Live connection state, touch counters and a gesture stream to tune noisy panels. |
 | 🔒 **User space only** | No kernel extension or driver install: one app, one Accessibility permission. |
@@ -48,17 +48,18 @@ TouchMyMac turns an external USB touchscreen into a real macOS input device. It 
 | Tap with two fingers | Secondary click, like on a Mac trackpad |
 | Pinch with two fingers | Zoom |
 | Swipe up with three fingers | Mission Control |
-| Swipe up / down with four fingers | Show / hide the floating keyboard |
+| Swipe up / down with four fingers | Show / hide the floating keyboard (also over the keyboard) |
 | Swipe left with four fingers | Shortcut sequence (default `cmd+a, delete`) |
 | Hold five fingers still | Keep a shortcut pressed (default `fn`) |
 
 ## ⌨️ Floating keyboard
 
 - Full Mac (US ANSI) layout with the number row, symbols and arrow keys
-- Keys fire on touch down, and each finger types its own key, so fast typing doesn't drop letters
+- Keys fire as you touch them (within 45 ms, or as soon as you lift), and each finger types its own key, so fast typing doesn't drop letters
 - Sticky shift, control, option and command for shortcuts like ⌘C, plus caps lock
 - Delete, space and the arrow keys repeat while held
-- Floats above every other window; hide it with a four-finger swipe down or the hide key
+- Floats above every other window; drag it by the handle on top or its empty edge, and it remembers where you put it
+- Hide it with the hide key or a four-finger swipe down, which also works with your fingers on the keyboard
 
 ## 🌀 How scrolling works
 

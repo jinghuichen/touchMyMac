@@ -61,6 +61,14 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)claimedTouchDidEnd:(NSUUID *)touchID;
 
+- (void)claimedTouchDidMove:(NSUUID *)touchID toScreenLocation:(CGPoint)location;
+
+/**
+ Enough fingers are down, some of them claimed, to make a multi-finger gesture: claimed touches should
+ stop acting on their own (e.g. keys that haven't fired yet should not fire).
+ */
+- (void)claimedTouchesDidBecomeGesture;
+
 @end
 
 NS_ASSUME_NONNULL_END

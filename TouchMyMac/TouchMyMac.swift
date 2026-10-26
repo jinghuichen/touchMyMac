@@ -676,6 +676,14 @@ extension TouchMyMac: TUCTouchDelegate {
     func claimedTouchDidEnd(_ touchID: UUID) {
         floatingKeyboard?.keyboardView.endTouch(touchID)
     }
+
+    func claimedTouchDidMove(_ touchID: UUID, toScreenLocation location: CGPoint) {
+        floatingKeyboard?.keyboardView.moveTouch(touchID, toScreenLocation: location)
+    }
+
+    func claimedTouchesDidBecomeGesture() {
+        floatingKeyboard?.keyboardView.cancelForGesture()
+    }
 }
 
 
