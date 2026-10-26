@@ -56,8 +56,8 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
 
     @Published var isScrollInertiaEnabled = true
-    @Published var scrollSpeedMultiplier: CGFloat = 1.4
-    @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.95
+    @Published var scrollSpeedMultiplier: CGFloat = 1.0
+    @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.92
     @Published var scrollInertiaVelocityMultiplier: CGFloat = 1.0
     
     
@@ -424,8 +424,8 @@ extension TouchMyMac {
             "fiveFingerHoldShortcutSpec" : "fn",
             "fourFingerSwipeLeftSequenceSpec" : "cmd+a, delete",
             "isScrollInertiaEnabled" : true,
-            "scrollSpeedMultiplier" : 1.4,
-            "scrollInertiaDecelerationPerFrame" : 0.95,
+            "scrollSpeedMultiplier" : 1.0,
+            "scrollInertiaDecelerationPerFrame" : 0.92,
             "scrollInertiaVelocityMultiplier" : 1.0
         ])
         
