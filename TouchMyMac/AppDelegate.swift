@@ -299,6 +299,7 @@ final class FloatingKeyboardView: NSView {
     private static let gap: CGFloat = 6
     private static let padding: CGFloat = 10
     private static let grabberHeight: CGFloat = 22 // drag handle strip above the keys
+    private static let edgeSnapDistance: CGFloat = 28 // closer than this to a screen edge, the panel sticks to it
     /// Keys fire this long after touch down (or on liftoff, if sooner), so four fingers landing on the
     /// keyboard for a swipe are recognized as a gesture before any of them types.
     private static let keyCommitDelay: TimeInterval = 0.045
@@ -498,8 +499,32 @@ final class FloatingKeyboardView: NSView {
     }
 
     private func moveDrag(to screenPoint: NSPoint) {
-        window?.setFrameOrigin(NSPoint(x: dragStartOrigin.x + screenPoint.x - dragStartLocation.x,
-                                       y: dragStartOrigin.y + screenPoint.y - dragStartLocation.y))
+        guard let window else { return }
+        let origin = NSPoint(x: dragStartOrigin.x + screenPoint.x - dragStartLocation.x,
+                             y: dragStartOrigin.y + screenPoint.y - dragStartLocation.y)
+        // Keep it on the screen the finger is on, so it can still be dragged to another display.
+        let screen = NSScreen.screens.first { $0.frame.contains(screenPoint) } ?? window.screen
+        guard let area = screen?.visibleFrame else {
+            window.setFrameOrigin(origin)
+            return
+        }
+        window.setFrameOrigin(Self.snappedOrigin(origin, size: window.frame.size, in: area))
+    }
+
+    /// Keeps the whole panel inside `area` and pulls it flush against an edge it comes close to, like a magnet.
+    static func snappedOrigin(_ origin: NSPoint, size: NSSize, in area: NSRect) -> NSPoint {
+        func snap(_ value: CGFloat, length: CGFloat, min lower: CGFloat, max upper: CGFloat) -> CGFloat {
+            let clamped = Swift.min(Swift.max(value, lower), upper - length)
+            if clamped - lower < edgeSnapDistance {
+                return lower
+            }
+            if upper - (clamped + length) < edgeSnapDistance {
+                return upper - length
+            }
+            return clamped
+        }
+        return NSPoint(x: snap(origin.x, length: size.width, min: area.minX, max: area.maxX),
+                       y: snap(origin.y, length: size.height, min: area.minY, max: area.maxY))
     }
 
     private func endDrag() {
@@ -784,8 +809,9 @@ class FloatingKeyboardPanel: NSPanel {
 
     func makeVisible() {
         if !self.isVisible {
-            if let userOrigin, NSScreen.screens.contains(where: { $0.visibleFrame.contains(NSRect(origin: userOrigin, size: frame.size).center) }) {
-                setFrameOrigin(userOrigin)
+            if let userOrigin, let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(NSRect(origin: userOrigin, size: frame.size).center) }) {
+                // The screen layout may have changed since; keep it fully on screen.
+                setFrameOrigin(FloatingKeyboardView.snappedOrigin(userOrigin, size: frame.size, in: screen.visibleFrame))
             } else if let targetScreen = model?.touchscreen()?.systemScreen() ?? NSScreen.main {
                 let visibleFrame = targetScreen.visibleFrame
                 let origin = CGPoint(

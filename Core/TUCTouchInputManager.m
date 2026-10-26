@@ -90,6 +90,7 @@ static const NSUInteger kClaimedGestureFingerCount = 4; // fingers on the keyboa
 static const NSTimeInterval kFiveFingerHoldActivationDuration = 0.25;
 static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
+static const CGFloat kClaimedTouchRestingStepMM = 2.0f; // a finger moving less than this per report was resting
 static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
 #pragma mark   Start & Stop
@@ -412,9 +413,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
             digitizerPoint:(CGPoint)digitizerPoint
          tooLargeForFinger:(BOOL)confidenceFlag {
 
-    if (!isNewTouch && isOnSurface && [self distanceMMFromPoint:point toPoint:touch.location] > kClaimedTouchJumpDistanceMM) {
+    BOOL wasResting = [self distanceMMFromPoint:touch.location toPoint:touch.previousLocation] < kClaimedTouchRestingStepMM;
+    if (!isNewTouch && isOnSurface && wasResting
+        && [self distanceMMFromPoint:point toPoint:touch.location] > kClaimedTouchJumpDistanceMM) {
         // Some screens hand a contact ID to the next finger without reporting liftoff in between.
         // During fast typing that next finger lands on another key, so start a fresh touch for it.
+        // A finger that was already moving (dragging the keyboard) is just moving fast.
         [touch setIsOnSurface:NO];
         [touch setPhase:NSTouchPhaseEnded];
         [self removeTouch:touch now:NO];
