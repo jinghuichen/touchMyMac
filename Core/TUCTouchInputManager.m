@@ -1218,15 +1218,15 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         self.identifiedMultitouchGesture = _TUCCursorGestureNone;
         
         self.doubleClickTolerance = 5;
-        self.holdDuration = 0.08;
+        self.holdDuration = 0.1;
         self.errorResistance = 0;
         
         self.ignoreOriginTouches = NO;
 
         self.scrollInertiaEnabled = YES;
-        self.scrollInertiaDecelerationPerFrame = 0.95;
+        self.scrollInertiaDecelerationPerFrame = 0.92;
         self.scrollInertiaVelocityMultiplier = 1.0;
-        self.scrollSpeedMultiplier = 1.4;
+        self.scrollSpeedMultiplier = 1.0;
         self.threeFingerSwipeEnabled = YES;
         self.fourFingerSwipeUpKeyboardEnabled = YES;
         self.fiveFingerHoldShortcutSpec = @"fn";

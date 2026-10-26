@@ -23,7 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Default matches the built-in tuning.
 @property (nonatomic) CGFloat momentumDecelerationPerFrame;
 
-/// Multiplies the initial inertial velocity at liftoff (1.0 = unchanged).
+/// Scales how far inertia glides (1.0 = unchanged). Inertia always starts at the release velocity.
 @property (nonatomic) CGFloat momentumVelocityMultiplier;
 
 /// Minimum finger velocity (px/s) needed to start inertial scrolling on liftoff.
