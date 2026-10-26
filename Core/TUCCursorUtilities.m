@@ -23,6 +23,11 @@
 @property BOOL isScrollGestureActive;
 @property CGPoint scrollRemainder; // sub-pixel part of the deltas, carried into the next event
 @property CGPoint fingerScrollPosition; // total finger travel in this scroll gesture
+// Adaptive smoothing of the finger path (see `filterFingerPosition:at:`).
+@property CGPoint filteredFingerPosition;
+@property CGPoint filteredFingerVelocity;
+@property CGPoint lastRawFingerPosition;
+@property CFTimeInterval filterLastTime;
 @property CGPoint scrollOutputPosition; // total travel already posted
 // The two latest finger reports, used to resample the finger path at display frame times.
 @property CFTimeInterval scrollPathTime0;
@@ -57,6 +62,11 @@
 static const NSTimeInterval kMomentumTickInterval = 1.0 / 60.0; // the "frame" that deceleration settings refer to
 static const NSTimeInterval kFallbackFrameInterval = 1.0 / 120.0;
 static const CFTimeInterval kDefaultReportInterval = 1.0 / 100.0;
+// One Euro filter settings for the finger path: cutoff frequency at rest (Hz), how fast the cutoff
+// rises with finger speed (Hz per px/s), and the cutoff used to smooth the speed estimate itself.
+static const CGFloat kScrollFilterMinCutoff = 3.0;
+static const CGFloat kScrollFilterBeta = 0.03;
+static const CGFloat kScrollFilterSpeedCutoff = 1.0;
 static const CFTimeInterval kScrollVelocityWindow = 0.08; // seconds of movement that determine the fling velocity
 static const CGFloat kDefaultMomentumVelocityStopThreshold = 5.0;     // px/s
 static const CGFloat kDefaultMomentumStartThreshold = 120.0;          // px/s
@@ -335,6 +345,12 @@ static inline CGFloat TUCClamp(CGFloat v, CGFloat minV, CGFloat maxV) {
     return v < minV ? minV : (v > maxV ? maxV : v);
 }
 
+/// Exponential smoothing factor for a low-pass filter with the given cutoff frequency (Hz).
+static inline CGFloat TUCSmoothingFactor(CFTimeInterval dt, CGFloat cutoff) {
+    CGFloat tau = (CGFloat)(1.0 / (2.0 * M_PI * cutoff));
+    return (CGFloat)(1.0 / (1.0 + tau / dt));
+}
+
 static inline CFTimeInterval TUCNowSeconds(void) {
     return CACurrentMediaTime();
 }
@@ -469,6 +485,10 @@ static inline CFTimeInterval TUCNowSeconds(void) {
         self.scrollRemainder = CGPointZero;
         _scrollSampleCount = 0;
         self.fingerScrollPosition = translation;
+        self.filteredFingerPosition = translation;
+        self.filteredFingerVelocity = CGPointZero;
+        self.lastRawFingerPosition = translation;
+        self.filterLastTime = now;
         self.scrollOutputPosition = translation;
         self.scrollPathTime0 = now;
         self.scrollPathTime1 = now;
@@ -479,7 +499,7 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     } else {
         // Posted on the next display frames by `advanceScrollOutput`, not right away.
         self.fingerScrollPosition = TUCPointAdd(self.fingerScrollPosition, translation);
-        [self appendScrollPathPosition:self.fingerScrollPosition at:now];
+        [self appendScrollPathPosition:[self filterFingerPosition:self.fingerScrollPosition at:now] at:now];
     }
     // Stationary frames record zero movement, so a finger that stops before lifting doesn't fling.
     // A movement-free liftoff is skipped: on screens without liftoff reports it arrives only after a
@@ -505,13 +525,35 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     if (!self.isScrollGestureActive) {
         return;
     }
-    // Catch up with the finger, then end.
-    [self postScrollDelta:TUCPointSubtract(self.fingerScrollPosition, self.scrollOutputPosition)
+    // Catch up with the (smoothed) finger, then end.
+    [self postScrollDelta:TUCPointSubtract(self.scrollPathPosition1, self.scrollOutputPosition)
               scrollPhase:kCGScrollPhaseChanged
             momentumPhase:kCGMomentumScrollPhaseNone];
-    self.scrollOutputPosition = self.fingerScrollPosition;
+    self.scrollOutputPosition = self.scrollPathPosition1;
     [self postScrollDelta:CGPointZero scrollPhase:kCGScrollPhaseEnded momentumPhase:kCGMomentumScrollPhaseNone];
     self.isScrollGestureActive = NO;
+}
+
+/**
+ Touch coordinates jitter by a fraction of a millimetre. When the finger moves slowly that jitter is as
+ large as the movement itself, so the content would step back and forth. A One Euro filter (Casiez et al.,
+ CHI 2012) smooths strongly at low speed and barely at high speed, where lag would be noticeable.
+ */
+- (CGPoint)filterFingerPosition:(CGPoint)raw at:(CFTimeInterval)time {
+    CFTimeInterval dt = (CFTimeInterval)TUCClamp((CGFloat)(time - self.filterLastTime), 0.001f, 0.05f);
+    self.filterLastTime = time;
+
+    CGPoint rawVelocity = TUCPointScale(TUCPointSubtract(raw, self.lastRawFingerPosition), (CGFloat)(1.0 / dt));
+    self.lastRawFingerPosition = raw;
+    CGFloat speedFactor = TUCSmoothingFactor(dt, kScrollFilterSpeedCutoff);
+    self.filteredFingerVelocity = TUCPointAdd(self.filteredFingerVelocity,
+                                              TUCPointScale(TUCPointSubtract(rawVelocity, self.filteredFingerVelocity), speedFactor));
+
+    CGFloat cutoff = kScrollFilterMinCutoff + kScrollFilterBeta * TUCLength(self.filteredFingerVelocity);
+    CGFloat factor = TUCSmoothingFactor(dt, cutoff);
+    self.filteredFingerPosition = TUCPointAdd(self.filteredFingerPosition,
+                                              TUCPointScale(TUCPointSubtract(raw, self.filteredFingerPosition), factor));
+    return self.filteredFingerPosition;
 }
 
 - (void)appendScrollPathPosition:(CGPoint)position at:(CFTimeInterval)time {
