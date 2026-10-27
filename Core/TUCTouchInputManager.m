@@ -37,18 +37,20 @@
 @property CGPoint lastScrollLocation;
 
 @property TUCCursorGesture identifiedMultitouchGesture;
-@property CGPoint threeFingerSwipeStartCentroid;
-@property BOOL threeFingerSwipeTriggered;
-@property BOOL threeFingerSwipeTracking;
-@property CGPoint fourFingerSwipeLeftStartCentroid;
-@property BOOL fourFingerSwipeLeftTriggered;
-@property BOOL fourFingerSwipeLeftTracking;
-@property CGPoint fourFingerSwipeUpStartCentroid;
-@property BOOL fourFingerSwipeUpTriggered;
-@property BOOL fourFingerSwipeUpTracking;
-@property CGPoint fourFingerSwipeDownStartCentroid;
-@property BOOL fourFingerSwipeDownTriggered;
-@property BOOL fourFingerSwipeDownTracking;
+
+// Gestures with three or more fingers are recognized per session (first finger down until all fingers
+// lifted, claimed touches included), so fingers dropping out or lifting one by one can't change them.
+@property NSInteger gestureFingerCount; // most fingers that stayed down for `kStableTouchCountReports` reports
+@property NSInteger lastReportTouchCount;
+@property NSInteger lastReportTouchCountRepeats;
+@property CGPoint multiFingerTravel; // centroid travel in relative screen units
+@property CGPoint multiFingerLastCentroid;
+@property NSInteger multiFingerLastCentroidCount;
+@property BOOL multiFingerGestureTriggered;
+@property BOOL claimedTouchesBecameGesture;
+// A three-finger swipe opened Mission Control and no tap has closed it yet. Four- and five-finger
+// gestures are ignored meanwhile, since showing the keyboard or firing shortcuts over it gets it stuck.
+@property BOOL missionControlMayBeOpen;
 @property CGPoint fiveFingerHoldStartCentroid;
 @property BOOL fiveFingerHoldActivated;
 @property BOOL fiveFingerHoldTracking;
@@ -82,11 +84,13 @@ static const NSTimeInterval kTouchInactivityTimeout = 0.12;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxHorizontalTravelMM = 18.0f;
 static const CGFloat kFourFingerSwipeTriggerTravelMM = 20.0f;
-static const CGFloat kFourFingerSwipeMaxVerticalTravelMM = 18.0f;
-static const CGFloat kFourFingerSwipeMaxHorizontalTravelMM = 18.0f;
+static const CGFloat kFourFingerSwipeMaxCrossTravelMM = 18.0f;
+static const NSInteger kStableTouchCountReports = 3; // a finger count must last this long to count for a gesture
+static const NSUInteger kClaimedGestureFingerCount = 4; // fingers on the keyboard that make a gesture, not key presses
 static const NSTimeInterval kFiveFingerHoldActivationDuration = 0.25;
 static const CGFloat kFiveFingerHoldMaxTravelMM = 12.0f;
 static const CGFloat kClaimedTouchJumpDistanceMM = 8.0f;
+static const CGFloat kClaimedTouchRestingStepMM = 2.0f; // a finger moving less than this per report was resting
 static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
 #pragma mark   Start & Stop
@@ -153,12 +157,20 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     self.debugProcessFrameID = self.currentFrameID;
     self.debugActiveTouchCount = (NSInteger)[[self activeTouches] count];
 
+    NSArray<TUCTouch *> *allTouches = [[self allActiveTouches] allObjects];
+    [self updateGestureFingerCountWithTouches:allTouches];
+
     // Process before tearing the gesture down, so a liftoff still sees the gesture it ends
     // (e.g. the final scroll frame that hands over to inertia).
-    [self processTouchesForCursorInput];
+    if (![self processMultiFingerGestureWithTouches:allTouches]) {
+        [self processTouchesForCursorInput];
+    }
 
     if ([[self activeTouches] count] == 0) {
         [self stopCurrentGesture];
+    }
+    if (allTouches.count == 0) {
+        [self resetMultiFingerSession];
     }
     [self finishPendingTwoFingerTapIfNeeded];
     [self.delegate inputDiagnosticsDidChange];
@@ -195,7 +207,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         [touch setIsOnSurface:NO];
         [touch setPhase:NSTouchPhaseEnded];
 
-        if (self.cursorTouch != nil && touch.uuid == self.cursorTouch.uuid) {
+        if (self.cursorTouch != nil && touch.uuid == self.cursorTouch.uuid && self.gestureFingerCount < 3) {
             // Drive the existing gesture state machine to decide between tap/drag/hold&drag.
             [self processTouchesForCursorInput];
         }
@@ -205,6 +217,10 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     }
 
     if (didChange) {
+        if ([[self allActiveTouches] count] == 0) {
+            [self stopCurrentGesture];
+            [self resetMultiFingerSession];
+        }
         [self finishPendingTwoFingerTapIfNeeded];
         [self.delegate touchesDidChange];
     }
@@ -223,18 +239,6 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         return 0;
     }
     return [self distanceMMFromPoint:self.cursorTouch.location toPoint:self.cursorTouchStartLocation];
-}
-
-- (void)resetThreeFingerSwipeTracking {
-    self.threeFingerSwipeTracking = NO;
-    self.threeFingerSwipeTriggered = NO;
-    self.threeFingerSwipeStartCentroid = CGPointZero;
-    self.debugThreeFingerTracking = NO;
-    self.debugThreeFingerTriggered = NO;
-    self.debugThreeFingerTouchCount = 0;
-    self.debugThreeFingerUpwardTouchCount = 0;
-    self.debugThreeFingerVerticalTravelMM = 0;
-    self.debugThreeFingerHorizontalTravelMM = 0;
 }
 
 - (CGPoint)centroidForTouches:(NSArray<TUCTouch *> *)touches {
@@ -275,28 +279,6 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     return upwardTouches;
 }
 
-- (NSInteger)leftwardTouchCountForTouches:(NSArray<TUCTouch *> *)touches
-                              hasRightward:(BOOL *)hasRightward {
-    NSInteger leftwardTouches = 0;
-    BOOL foundRightward = NO;
-
-    for (TUCTouch *touch in touches) {
-        CGPoint trajectory = [touch trajectory];
-        if (trajectory.x > 0) {
-            foundRightward = YES;
-        }
-        if (trajectory.x < 0 && fabs(trajectory.x) >= fabs(trajectory.y)) {
-            leftwardTouches += 1;
-        }
-    }
-
-    if (hasRightward != NULL) {
-        *hasRightward = foundRightward;
-    }
-
-    return leftwardTouches;
-}
-
 - (BOOL)isThreeFingerSwipeEnabledInCurrentConfig {
     return self.threeFingerSwipeEnabled;
 }
@@ -307,24 +289,6 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
 - (BOOL)isFiveFingerHoldEnabledInCurrentConfig {
     return [[self.fiveFingerHoldShortcutSpec stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] length] > 0;
-}
-
-- (void)resetFourFingerSwipeLeftTracking {
-    self.fourFingerSwipeLeftTracking = NO;
-    self.fourFingerSwipeLeftTriggered = NO;
-    self.fourFingerSwipeLeftStartCentroid = CGPointZero;
-}
-
-- (void)resetFourFingerSwipeUpTracking {
-    self.fourFingerSwipeUpTracking = NO;
-    self.fourFingerSwipeUpTriggered = NO;
-    self.fourFingerSwipeUpStartCentroid = CGPointZero;
-}
-
-- (void)resetFourFingerSwipeDownTracking {
-    self.fourFingerSwipeDownTracking = NO;
-    self.fourFingerSwipeDownTriggered = NO;
-    self.fourFingerSwipeDownStartCentroid = CGPointZero;
 }
 
 - (void)resetFiveFingerHoldTracking {
@@ -348,11 +312,6 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
     self.identifiedMultitouchGesture = _TUCCursorGestureNone;
     self.gestureAdditionalTouch = nil;
-    [self resetThreeFingerSwipeTracking];
-    [self resetFourFingerSwipeLeftTracking];
-    [self resetFourFingerSwipeUpTracking];
-    [self resetFourFingerSwipeDownTracking];
-    [self resetFiveFingerHoldTracking];
 }
 
 
@@ -454,9 +413,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
             digitizerPoint:(CGPoint)digitizerPoint
          tooLargeForFinger:(BOOL)confidenceFlag {
 
-    if (!isNewTouch && isOnSurface && [self distanceMMFromPoint:point toPoint:touch.location] > kClaimedTouchJumpDistanceMM) {
+    BOOL wasResting = [self distanceMMFromPoint:touch.location toPoint:touch.previousLocation] < kClaimedTouchRestingStepMM;
+    if (!isNewTouch && isOnSurface && wasResting
+        && [self distanceMMFromPoint:point toPoint:touch.location] > kClaimedTouchJumpDistanceMM) {
         // Some screens hand a contact ID to the next finger without reporting liftoff in between.
         // During fast typing that next finger lands on another key, so start a fresh touch for it.
+        // A finger that was already moving (dragging the keyboard) is just moving fast.
         [touch setIsOnSurface:NO];
         [touch setPhase:NSTouchPhaseEnded];
         [self removeTouch:touch now:NO];
@@ -471,6 +433,8 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     if (!isOnSurface) {
         [touch setPhase:NSTouchPhaseEnded];
         [self removeTouch:touch now:NO];
+    } else if (!isNewTouch) {
+        [self.delegate claimedTouchDidMove:touch.uuid toScreenLocation:[self convertScreenPointRelativeToAbsolute:point]];
     }
 }
 
@@ -527,156 +491,9 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         }
     }
 
-    if ((![self isFiveFingerHoldEnabledInCurrentConfig] || self.fiveFingerHoldTracking) && [touches count] != 5) {
-        [self resetFiveFingerHoldTracking];
-    }
-
-    if ([self isFiveFingerHoldEnabledInCurrentConfig] && [touches count] == 5 && [touches containsObject:cursorTouch]) {
-        CGPoint centroid = [self centroidForTouches:touches];
-        CGSize physicalSize = [self touchscreen].physicalSize;
-
-        if (!self.fiveFingerHoldTracking) {
-            self.fiveFingerHoldTracking = YES;
-            self.fiveFingerHoldActivated = NO;
-            self.fiveFingerHoldStartCentroid = centroid;
-            self.fiveFingerHoldStartDate = [NSDate date];
-        }
-
-        CGFloat dxMM = (centroid.x - self.fiveFingerHoldStartCentroid.x) * physicalSize.width;
-        CGFloat dyMM = (centroid.y - self.fiveFingerHoldStartCentroid.y) * physicalSize.height;
-        CGFloat travelMM = (CGFloat)sqrt((double)(dxMM * dxMM + dyMM * dyMM));
-        NSTimeInterval holdTime = self.fiveFingerHoldStartDate == nil ? 0 : [[NSDate date] timeIntervalSinceDate:self.fiveFingerHoldStartDate];
-
-        if (!self.fiveFingerHoldActivated && travelMM > kFiveFingerHoldMaxTravelMM) {
-            self.fiveFingerHoldStartCentroid = centroid;
-            self.fiveFingerHoldStartDate = [NSDate date];
-        } else if (!self.fiveFingerHoldActivated && holdTime >= kFiveFingerHoldActivationDuration) {
-            [self performMouseEventForGesture:TUCCursorGestureFiveFingerHold];
-            self.fiveFingerHoldActivated = YES;
-        }
-
-        return;
-    }
-
-    if ((![self isFourFingerSwipeLeftEnabledInCurrentConfig] || self.fourFingerSwipeLeftTracking) && [touches count] != 4) {
-        [self resetFourFingerSwipeLeftTracking];
-    }
-
-    if ((!self.fourFingerSwipeUpKeyboardEnabled || self.fourFingerSwipeUpTracking) && [touches count] != 4) {
-        [self resetFourFingerSwipeUpTracking];
-    }
-
-    if ((!self.fourFingerSwipeUpKeyboardEnabled || self.fourFingerSwipeDownTracking) && [touches count] != 4) {
-        [self resetFourFingerSwipeDownTracking];
-    }
-
-    if ([touches count] == 4 && [touches containsObject:cursorTouch]) {
-        CGPoint centroid = [self centroidForTouches:touches];
-        CGSize physicalSize = [self touchscreen].physicalSize;
-
-        if ([self isFourFingerSwipeLeftEnabledInCurrentConfig] && !self.fourFingerSwipeLeftTracking) {
-            self.fourFingerSwipeLeftTracking = YES;
-            self.fourFingerSwipeLeftTriggered = NO;
-            self.fourFingerSwipeLeftStartCentroid = centroid;
-        }
-
-        if (self.fourFingerSwipeUpKeyboardEnabled && !self.fourFingerSwipeUpTracking) {
-            self.fourFingerSwipeUpTracking = YES;
-            self.fourFingerSwipeUpTriggered = NO;
-            self.fourFingerSwipeUpStartCentroid = centroid;
-        }
-
-        if (self.fourFingerSwipeUpKeyboardEnabled && !self.fourFingerSwipeDownTracking) {
-            self.fourFingerSwipeDownTracking = YES;
-            self.fourFingerSwipeDownTriggered = NO;
-            self.fourFingerSwipeDownStartCentroid = centroid;
-        }
-
-        CGFloat leftHorizontalTravelMM = (self.fourFingerSwipeLeftStartCentroid.x - centroid.x) * physicalSize.width;
-        CGFloat leftVerticalTravelMM = fabs((centroid.y - self.fourFingerSwipeLeftStartCentroid.y) * physicalSize.height);
-        BOOL shouldTriggerLeft = [self isFourFingerSwipeLeftEnabledInCurrentConfig]
-            && leftHorizontalTravelMM >= kFourFingerSwipeTriggerTravelMM
-            && leftVerticalTravelMM <= kFourFingerSwipeMaxVerticalTravelMM
-            && leftHorizontalTravelMM >= leftVerticalTravelMM;
-
-        CGFloat upVerticalTravelMM = (self.fourFingerSwipeUpStartCentroid.y - centroid.y) * physicalSize.height;
-        CGFloat upHorizontalTravelMM = fabs((centroid.x - self.fourFingerSwipeUpStartCentroid.x) * physicalSize.width);
-        BOOL shouldTriggerUp = self.fourFingerSwipeUpKeyboardEnabled
-            && upVerticalTravelMM >= kFourFingerSwipeTriggerTravelMM
-            && upHorizontalTravelMM <= kFourFingerSwipeMaxHorizontalTravelMM
-            && upVerticalTravelMM >= upHorizontalTravelMM;
-
-        CGFloat downVerticalTravelMM = (centroid.y - self.fourFingerSwipeDownStartCentroid.y) * physicalSize.height;
-        CGFloat downHorizontalTravelMM = fabs((centroid.x - self.fourFingerSwipeDownStartCentroid.x) * physicalSize.width);
-        BOOL shouldTriggerDown = self.fourFingerSwipeUpKeyboardEnabled
-            && downVerticalTravelMM >= kFourFingerSwipeTriggerTravelMM
-            && downHorizontalTravelMM <= kFourFingerSwipeMaxHorizontalTravelMM
-            && downVerticalTravelMM >= downHorizontalTravelMM;
-
-        if (!self.fourFingerSwipeUpTriggered && shouldTriggerUp && upVerticalTravelMM >= leftHorizontalTravelMM) {
-            self.suppressEndedPrimaryTouchAction = YES;
-            [self performMouseEventForGesture:TUCCursorGestureFourFingerSwipeUp];
-            self.fourFingerSwipeUpTriggered = YES;
-            return;
-        }
-
-        if (!self.fourFingerSwipeDownTriggered && shouldTriggerDown
-            && downVerticalTravelMM >= leftHorizontalTravelMM) {
-            self.suppressEndedPrimaryTouchAction = YES;
-            [self performMouseEventForGesture:TUCCursorGestureFourFingerSwipeDown];
-            self.fourFingerSwipeDownTriggered = YES;
-            return;
-        }
-
-        if (!self.fourFingerSwipeLeftTriggered && shouldTriggerLeft) {
-            self.suppressEndedPrimaryTouchAction = YES;
-            [self performMouseEventForGesture:TUCCursorGestureFourFingerSwipeLeft];
-            self.fourFingerSwipeLeftTriggered = YES;
-            return;
-        }
-
-        if ([self isFourFingerSwipeLeftEnabledInCurrentConfig] || self.fourFingerSwipeUpKeyboardEnabled) {
-            return;
-        }
-    }
-
-    if ((!self.threeFingerSwipeEnabled || self.threeFingerSwipeTracking) && [touches count] != 3) {
-        [self resetThreeFingerSwipeTracking];
-    }
-
-    if (self.threeFingerSwipeEnabled && [touches count] == 3 && [touches containsObject:cursorTouch]) {
-        if (!self.threeFingerSwipeTracking) {
-            self.threeFingerSwipeTracking = YES;
-            self.threeFingerSwipeTriggered = NO;
-            self.threeFingerSwipeStartCentroid = [self centroidForTouches:touches];
-        }
-
-        CGPoint centroid = [self centroidForTouches:touches];
-        CGSize physicalSize = [self touchscreen].physicalSize;
-        CGFloat verticalTravelMM = (self.threeFingerSwipeStartCentroid.y - centroid.y) * physicalSize.height;
-        CGFloat horizontalTravelMM = fabs((centroid.x - self.threeFingerSwipeStartCentroid.x) * physicalSize.width);
-
-        BOOL hasDownward = NO;
-        NSInteger upwardTouchCount = [self upwardTouchCountForTouches:touches hasDownward:&hasDownward];
-        BOOL shouldTrigger = !hasDownward
-            && upwardTouchCount >= 2
-            && verticalTravelMM >= kThreeFingerSwipeTriggerTravelMM
-            && horizontalTravelMM <= kThreeFingerSwipeMaxHorizontalTravelMM;
-
-        self.debugThreeFingerTracking = YES;
-        self.debugThreeFingerTriggered = self.threeFingerSwipeTriggered;
-        self.debugThreeFingerTouchCount = touches.count;
-        self.debugThreeFingerUpwardTouchCount = upwardTouchCount;
-        self.debugThreeFingerVerticalTravelMM = verticalTravelMM;
-        self.debugThreeFingerHorizontalTravelMM = horizontalTravelMM;
-
-        if (!self.threeFingerSwipeTriggered && shouldTrigger) {
-            self.suppressEndedPrimaryTouchAction = YES;
-            [self performMouseEventForGesture:TUCCursorGestureThreeFingerSwipeUp];
-            self.threeFingerSwipeTriggered = YES;
-            self.debugThreeFingerTriggered = YES;
-        }
-
+    // Three or more fingers are a multi-finger gesture (see `processMultiFingerGestureWithTouches:`).
+    // Until that count is stable, do nothing rather than scroll or drag with the first finger.
+    if (touches.count >= 3) {
         return;
     }
 
@@ -815,6 +632,185 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 }
 
 
+#pragma mark - Multi-Finger Gestures
+
+/**
+ Active touches including claimed ones (e.g. fingers on the floating keyboard), for multi-finger gestures.
+ */
+- (NSSet<TUCTouch *> *)allActiveTouches {
+    NSMutableSet<TUCTouch *> *active = [NSMutableSet setWithCapacity:self.touchSet.count];
+    for (TUCTouch *touch in self.touchSet) {
+        if (touch.isActive) {
+            [active addObject:touch];
+        }
+    }
+    return active;
+}
+
+/**
+ Called once per report. A finger count only counts once it lasts a few reports, so a contact that drops
+ out and comes back under a new ID (briefly one finger too many) can't turn four fingers into five.
+ */
+- (void)updateGestureFingerCountWithTouches:(NSArray<TUCTouch *> *)touches {
+    NSInteger count = (NSInteger)touches.count;
+    if (count == self.lastReportTouchCount) {
+        self.lastReportTouchCountRepeats += 1;
+    } else {
+        self.lastReportTouchCount = count;
+        self.lastReportTouchCountRepeats = 1;
+    }
+
+    // Enough fingers on the keyboard to be a gesture: tell it right away, before its keys commit.
+    if (!self.claimedTouchesBecameGesture && (NSUInteger)count >= kClaimedGestureFingerCount) {
+        for (TUCTouch *touch in touches) {
+            if (touch.isClaimed) {
+                self.claimedTouchesBecameGesture = YES;
+                [self.delegate claimedTouchesDidBecomeGesture];
+                break;
+            }
+        }
+    }
+
+    if (self.lastReportTouchCountRepeats < kStableTouchCountReports || count <= self.gestureFingerCount) {
+        return;
+    }
+
+    if (count >= 3 && self.gestureFingerCount < 3) {
+        [self abandonOneAndTwoFingerActions];
+        self.multiFingerTravel = CGPointZero;
+        self.multiFingerLastCentroidCount = 0;
+    }
+    self.gestureFingerCount = count;
+}
+
+/**
+ Once three or more fingers are down, whatever one or two fingers were doing (scroll, drag, pinch,
+ a possible tap) is over for the rest of the session.
+ */
+- (void)abandonOneAndTwoFingerActions {
+    [self stopCurrentGesture];
+    self.suppressEndedPrimaryTouchAction = YES;
+    self.cursorTouchDidHold = NO;
+    self.twoFingerTapPossible = NO;
+    self.pendingTwoFingerTap = NO;
+}
+
+- (void)resetMultiFingerSession {
+    [self resetFiveFingerHoldTracking];
+    self.gestureFingerCount = 0;
+    self.lastReportTouchCount = 0;
+    self.lastReportTouchCountRepeats = 0;
+    self.multiFingerTravel = CGPointZero;
+    self.multiFingerLastCentroidCount = 0;
+    self.multiFingerGestureTriggered = NO;
+    self.claimedTouchesBecameGesture = NO;
+    self.debugThreeFingerTracking = NO;
+    self.debugThreeFingerTriggered = NO;
+    self.debugThreeFingerTouchCount = 0;
+    self.debugThreeFingerUpwardTouchCount = 0;
+    self.debugThreeFingerVerticalTravelMM = 0;
+    self.debugThreeFingerHorizontalTravelMM = 0;
+}
+
+/**
+ Returns YES while the session is a multi-finger gesture, so one- and two-finger handling stays off.
+ */
+- (BOOL)processMultiFingerGestureWithTouches:(NSArray<TUCTouch *> *)touches {
+    if (self.gestureFingerCount < 3 || !self.postMouseEvents) {
+        return NO;
+    }
+
+    // A finger dropping out or joining moves the centroid without any real movement,
+    // so only frames with the same fingers as the last one add to the travel.
+    CGPoint centroid = [self centroidForTouches:touches];
+    if (touches.count > 0 && (NSInteger)touches.count == self.multiFingerLastCentroidCount) {
+        self.multiFingerTravel = CGPointMake(self.multiFingerTravel.x + centroid.x - self.multiFingerLastCentroid.x,
+                                             self.multiFingerTravel.y + centroid.y - self.multiFingerLastCentroid.y);
+    }
+    self.multiFingerLastCentroid = centroid;
+    self.multiFingerLastCentroidCount = (NSInteger)touches.count;
+
+    if (self.gestureFingerCount >= 4 && self.missionControlMayBeOpen) {
+        return YES;
+    }
+    if (self.gestureFingerCount >= 5) {
+        [self processFiveFingerHoldWithTouches:touches];
+        return YES;
+    }
+
+    CGSize physicalSize = [self touchscreen].physicalSize;
+    CGFloat rightMM = self.multiFingerTravel.x * physicalSize.width;
+    CGFloat downMM = self.multiFingerTravel.y * physicalSize.height;
+
+    if (self.gestureFingerCount == 3) {
+        self.debugThreeFingerTracking = YES;
+        self.debugThreeFingerTouchCount = touches.count;
+        self.debugThreeFingerUpwardTouchCount = [self upwardTouchCountForTouches:touches hasDownward:NULL];
+        self.debugThreeFingerVerticalTravelMM = -downMM;
+        self.debugThreeFingerHorizontalTravelMM = fabs(rightMM);
+    }
+
+    if (self.multiFingerGestureTriggered) {
+        return YES;
+    }
+
+    TUCCursorGesture gesture = _TUCCursorGestureNone;
+    if (self.gestureFingerCount == 3) {
+        if (self.threeFingerSwipeEnabled && -downMM >= kThreeFingerSwipeTriggerTravelMM
+            && fabs(rightMM) <= kThreeFingerSwipeMaxHorizontalTravelMM) {
+            gesture = TUCCursorGestureThreeFingerSwipeUp;
+            self.debugThreeFingerTriggered = YES;
+        }
+    } else {
+        BOOL mostlyVertical = fabs(rightMM) <= kFourFingerSwipeMaxCrossTravelMM;
+        if (self.fourFingerSwipeUpKeyboardEnabled && mostlyVertical && -downMM >= kFourFingerSwipeTriggerTravelMM) {
+            gesture = TUCCursorGestureFourFingerSwipeUp;
+        } else if (self.fourFingerSwipeUpKeyboardEnabled && mostlyVertical && downMM >= kFourFingerSwipeTriggerTravelMM) {
+            gesture = TUCCursorGestureFourFingerSwipeDown;
+        } else if ([self isFourFingerSwipeLeftEnabledInCurrentConfig] && fabs(downMM) <= kFourFingerSwipeMaxCrossTravelMM
+                   && -rightMM >= kFourFingerSwipeTriggerTravelMM) {
+            gesture = TUCCursorGestureFourFingerSwipeLeft;
+        }
+    }
+
+    if (gesture != _TUCCursorGestureNone) {
+        self.multiFingerGestureTriggered = YES;
+        if (gesture == TUCCursorGestureThreeFingerSwipeUp) {
+            // The swipe toggles Mission Control, so a second one closes it.
+            self.missionControlMayBeOpen = !self.missionControlMayBeOpen;
+        }
+        [self performMouseEventForGesture:gesture];
+    }
+    return YES;
+}
+
+- (void)processFiveFingerHoldWithTouches:(NSArray<TUCTouch *> *)touches {
+    if (![self isFiveFingerHoldEnabledInCurrentConfig] || touches.count != 5) {
+        [self resetFiveFingerHoldTracking];
+        return;
+    }
+
+    CGPoint centroid = [self centroidForTouches:touches];
+    if (!self.fiveFingerHoldTracking) {
+        self.fiveFingerHoldTracking = YES;
+        self.fiveFingerHoldActivated = NO;
+        self.fiveFingerHoldStartCentroid = centroid;
+        self.fiveFingerHoldStartDate = [NSDate date];
+    }
+    if (self.fiveFingerHoldActivated) {
+        return;
+    }
+
+    if ([self distanceMMFromPoint:centroid toPoint:self.fiveFingerHoldStartCentroid] > kFiveFingerHoldMaxTravelMM) {
+        self.fiveFingerHoldStartCentroid = centroid;
+        self.fiveFingerHoldStartDate = [NSDate date];
+    } else if ([[NSDate date] timeIntervalSinceDate:self.fiveFingerHoldStartDate] >= kFiveFingerHoldActivationDuration) {
+        [self performMouseEventForGesture:TUCCursorGestureFiveFingerHold];
+        self.fiveFingerHoldActivated = YES;
+    }
+}
+
+
 #pragma mark - Two-Finger Tap
 
 - (BOOL)anyTouchMovedFromInitialLocation:(NSArray<TUCTouch *> *)touches {
@@ -836,6 +832,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         return;
     }
     if ([self actionForGesture:TUCCursorGestureTapSecondFinger] == TUCCursorActionSecondaryClick) {
+        self.missionControlMayBeOpen = NO;
         [[TUCCursorUtilities sharedInstance] performSecondaryClickAt:screenLocation];
     }
 }
@@ -910,10 +907,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
             break;
             
         case TUCCursorActionClick:
+            self.missionControlMayBeOpen = NO; // a click closes Mission Control
             [utils performClickAt:screenLocation];
             break;
             
         case TUCCursorActionSecondaryClick:
+            self.missionControlMayBeOpen = NO;
             [utils performSecondaryClickAt: screenLocation];
             break;
             

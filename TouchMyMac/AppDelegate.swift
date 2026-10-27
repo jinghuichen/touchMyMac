@@ -237,6 +237,7 @@ struct KeyboardKey {
         case modifier(CGEventFlags) // sticky: applies to the next key press
         case capsLock
         case hide
+        case toggleSize // switches between the full and the mini keyboard
     }
 
     enum Alignment {
@@ -298,6 +299,11 @@ final class FloatingKeyboardView: NSView {
     private static let unit: CGFloat = 56
     private static let gap: CGFloat = 6
     private static let padding: CGFloat = 10
+    private static let grabberHeight: CGFloat = 22 // drag handle strip above the keys
+    private static let edgeSnapDistance: CGFloat = 28 // closer than this to a screen edge, the panel sticks to it
+    /// Keys fire this long after touch down (or on liftoff, if sooner), so four fingers landing on the
+    /// keyboard for a swipe are recognized as a gesture before any of them types.
+    private static let keyCommitDelay: TimeInterval = 0.045
     private static let keyRepeatDelay: TimeInterval = 0.45
     private static let keyRepeatInterval: TimeInterval = 0.06
 
@@ -344,10 +350,11 @@ final class FloatingKeyboardView: NSView {
             ],
         [
             .key(KeyboardKey(label: "", role: .hide)),
+            .key(KeyboardKey(label: "", role: .toggleSize)),
             .key(.modifier("control", glyph: "⌃", flag: .maskControl, width: 1, alignment: .leading)),
             .key(.modifier("option", glyph: "⌥", flag: .maskAlternate, width: 1, alignment: .leading)),
             .key(.modifier("command", glyph: "⌘", flag: .maskCommand, width: 1.25, alignment: .leading)),
-            .key(KeyboardKey(label: "", keyCode: kVK_Space, width: 5, repeats: true)),
+            .key(KeyboardKey(label: "", keyCode: kVK_Space, width: 4, repeats: true)),
             .key(.modifier("command", glyph: "⌘", flag: .maskCommand, width: 1.25, alignment: .trailing)),
             .key(.modifier("option", glyph: "⌥", flag: .maskAlternate, width: 1, alignment: .trailing)),
             .key(.arrow("◀", kVK_LeftArrow)),
@@ -356,21 +363,41 @@ final class FloatingKeyboardView: NSView {
         ]
     ]
 
-    static let contentSize = NSSize(width: 14.5 * unit + 2 * padding,
-                                    height: CGFloat(rows.count) * unit + 2 * padding)
+    /// The mini keyboard is the same layout at this size.
+    static let compactScale: CGFloat = 0.6
+
+    static func contentSize(scale: CGFloat) -> NSSize {
+        NSSize(width: (14.5 * unit + 2 * padding) * scale,
+               height: (grabberHeight + CGFloat(rows.count) * unit + 2 * padding) * scale)
+    }
 
     private weak var model: TouchMyMac?
-    private let keys: [(key: KeyboardKey, rect: NSRect)] = FloatingKeyboardView.makeLayout()
+    private var keys: [(key: KeyboardKey, rect: NSRect)] = FloatingKeyboardView.makeLayout(scale: 1)
+
+    var isCompact = false {
+        didSet {
+            keys = Self.makeLayout(scale: scale)
+            needsDisplay = true
+        }
+    }
+    var scale: CGFloat { isCompact ? Self.compactScale : 1 }
 
     private var latchedModifiers: CGEventFlags = []
     private var isCapsLockOn = false
     private var pressedKeys: [UUID: Int] = [:] // touch (or mouse) -> index into `keys`
+    private var pendingCommits: [UUID: Timer] = [:]
     private var repeatTimers: [UUID: Timer] = [:]
+    private var isPartOfGesture = false // the current touches are a multi-finger gesture, not key presses
     private let mousePressID = UUID()
+
+    // Moving the panel by its handle or empty edge.
+    private var dragID: UUID?
+    private var dragStartLocation = NSPoint.zero // screen coordinates
+    private var dragStartOrigin = NSPoint.zero
 
     init(model: TouchMyMac) {
         self.model = model
-        super.init(frame: NSRect(origin: .zero, size: Self.contentSize))
+        super.init(frame: NSRect(origin: .zero, size: Self.contentSize(scale: 1)))
     }
 
     required init?(coder: NSCoder) {
@@ -384,28 +411,68 @@ final class FloatingKeyboardView: NSView {
 
     // MARK: Input
 
-    /// Returns false when the location is not on a key, so the touch falls through to regular cursor handling.
+    /// Returns false when the location is outside the keyboard, so the touch falls through to regular cursor handling.
     func beginTouch(_ touchID: UUID, atScreenLocation location: CGPoint) -> Bool {
-        guard let window, let primaryScreen = NSScreen.screens.first else { return false }
-        // Touch locations are global display coordinates with the origin at the top left of the primary screen.
-        let screenPoint = NSPoint(x: location.x, y: primaryScreen.frame.maxY - location.y)
+        guard let window else { return false }
+        let screenPoint = Self.cocoaScreenPoint(location)
         let point = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
-        guard let index = keyIndex(at: point) else { return false }
-        press(index, id: touchID)
+        guard bounds.contains(point) else { return false }
+
+        if isPartOfGesture {
+            return true // keep it out of cursor handling; it only counts toward the gesture
+        }
+        if let index = keyIndex(at: point) {
+            press(index, id: touchID)
+        } else {
+            beginDrag(touchID, at: screenPoint)
+        }
         return true
     }
 
+    func moveTouch(_ touchID: UUID, toScreenLocation location: CGPoint) {
+        if touchID == dragID {
+            moveDrag(to: Self.cocoaScreenPoint(location))
+        }
+    }
+
     func endTouch(_ touchID: UUID) {
+        if touchID == dragID {
+            endDrag()
+        }
+        if let pending = pendingCommits.removeValue(forKey: touchID) {
+            // Lifted before the commit delay ran out: type the key now.
+            pending.invalidate()
+            commit(id: touchID)
+        }
         repeatTimers.removeValue(forKey: touchID)?.invalidate()
         if let index = pressedKeys.removeValue(forKey: touchID) {
             setNeedsDisplay(keys[index].rect.insetBy(dx: -2, dy: -2))
         }
+        if pressedKeys.isEmpty && dragID == nil {
+            isPartOfGesture = false
+        }
     }
 
-    func reset() {
+    /// Four or more fingers are down with some on the keyboard: they're a swipe, so keys that haven't fired don't.
+    func cancelForGesture() {
+        isPartOfGesture = true
+        pendingCommits.values.forEach { $0.invalidate() }
+        pendingCommits.removeAll()
         repeatTimers.values.forEach { $0.invalidate() }
         repeatTimers.removeAll()
         pressedKeys.removeAll()
+        endDrag()
+        needsDisplay = true
+    }
+
+    func reset() {
+        pendingCommits.values.forEach { $0.invalidate() }
+        pendingCommits.removeAll()
+        repeatTimers.values.forEach { $0.invalidate() }
+        repeatTimers.removeAll()
+        pressedKeys.removeAll()
+        endDrag()
+        isPartOfGesture = false
         latchedModifiers = []
         isCapsLockOn = false
         needsDisplay = true
@@ -414,6 +481,14 @@ final class FloatingKeyboardView: NSView {
     override func mouseDown(with event: NSEvent) {
         if let index = keyIndex(at: convert(event.locationInWindow, from: nil)) {
             press(index, id: mousePressID)
+        } else {
+            beginDrag(mousePressID, at: NSEvent.mouseLocation)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if dragID == mousePressID {
+            moveDrag(to: NSEvent.mouseLocation)
         }
     }
 
@@ -421,15 +496,87 @@ final class FloatingKeyboardView: NSView {
         endTouch(mousePressID)
     }
 
+    /// Touch locations are global display coordinates with the origin at the top left of the primary screen.
+    private static func cocoaScreenPoint(_ location: CGPoint) -> NSPoint {
+        NSPoint(x: location.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - location.y)
+    }
+
+
+    // MARK: Moving the panel
+
+    private func beginDrag(_ id: UUID, at screenPoint: NSPoint) {
+        guard dragID == nil, let window else { return }
+        dragID = id
+        dragStartLocation = screenPoint
+        dragStartOrigin = window.frame.origin
+        window.alphaValue = 0.85 // shows the panel is picked up
+        setNeedsDisplay(grabberRect.insetBy(dx: -12, dy: -4))
+    }
+
+    private func moveDrag(to screenPoint: NSPoint) {
+        guard let window else { return }
+        let origin = NSPoint(x: dragStartOrigin.x + screenPoint.x - dragStartLocation.x,
+                             y: dragStartOrigin.y + screenPoint.y - dragStartLocation.y)
+        // Keep it on the screen the finger is on, so it can still be dragged to another display.
+        let screen = NSScreen.screens.first { $0.frame.contains(screenPoint) } ?? window.screen
+        guard let area = screen?.visibleFrame else {
+            window.setFrameOrigin(origin)
+            return
+        }
+        window.setFrameOrigin(Self.snappedOrigin(origin, size: window.frame.size, in: area))
+    }
+
+    /// Keeps the whole panel inside `area` and pulls it flush against an edge it comes close to, like a magnet.
+    static func snappedOrigin(_ origin: NSPoint, size: NSSize, in area: NSRect) -> NSPoint {
+        func snap(_ value: CGFloat, length: CGFloat, min lower: CGFloat, max upper: CGFloat) -> CGFloat {
+            let clamped = Swift.min(Swift.max(value, lower), upper - length)
+            if clamped - lower < edgeSnapDistance {
+                return lower
+            }
+            if upper - (clamped + length) < edgeSnapDistance {
+                return upper - length
+            }
+            return clamped
+        }
+        return NSPoint(x: snap(origin.x, length: size.width, min: area.minX, max: area.maxX),
+                       y: snap(origin.y, length: size.height, min: area.minY, max: area.maxY))
+    }
+
+    private func endDrag() {
+        guard dragID != nil else { return }
+        dragID = nil
+        window?.alphaValue = 1
+        (window as? FloatingKeyboardPanel)?.rememberPosition()
+        setNeedsDisplay(grabberRect.insetBy(dx: -12, dy: -4))
+    }
+
+    private var grabberRect: NSRect {
+        let width: CGFloat = (dragID == nil ? 44 : 64) * scale
+        let height = max(5 * scale, 3)
+        return NSRect(x: bounds.midX - width / 2, y: (Self.grabberHeight * scale - height) / 2 + 2 * scale, width: width, height: height)
+    }
+
     private func keyIndex(at point: NSPoint) -> Int? {
         // Grow each key by half the gap so a touch between two keys still hits one of them.
-        keys.firstIndex { $0.rect.insetBy(dx: -Self.gap / 2, dy: -Self.gap / 2).contains(point) }
+        keys.firstIndex { $0.rect.insetBy(dx: -Self.gap * scale / 2, dy: -Self.gap * scale / 2).contains(point) }
     }
 
     private func press(_ index: Int, id: UUID) {
-        let key = keys[index].key
         pressedKeys[id] = index
         setNeedsDisplay(keys[index].rect.insetBy(dx: -2, dy: -2))
+
+        let timer = Timer(timeInterval: Self.keyCommitDelay, repeats: false) { [weak self] _ in
+            self?.pendingCommits.removeValue(forKey: id)
+            self?.commit(id: id)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pendingCommits[id]?.invalidate()
+        pendingCommits[id] = timer
+    }
+
+    private func commit(id: UUID) {
+        guard !isPartOfGesture, let index = pressedKeys[id] else { return }
+        let key = keys[index].key
 
         switch key.role {
         case .modifier(let flag):
@@ -442,6 +589,9 @@ final class FloatingKeyboardView: NSView {
 
         case .hide:
             window?.orderOut(nil)
+
+        case .toggleSize:
+            (window as? FloatingKeyboardPanel)?.setCompact(!isCompact)
 
         case .character:
             var flags = latchedModifiers
@@ -482,11 +632,12 @@ final class FloatingKeyboardView: NSView {
         zip(letters, keyCodes).map { .key(.letter(String($0), $1)) }
     }
 
-    private static func makeLayout() -> [(key: KeyboardKey, rect: NSRect)] {
+    private static func makeLayout(scale: CGFloat) -> [(key: KeyboardKey, rect: NSRect)] {
         var layout: [(key: KeyboardKey, rect: NSRect)] = []
+        let unit = Self.unit * scale, gap = Self.gap * scale, padding = Self.padding * scale
 
         for (rowIndex, row) in rows.enumerated() {
-            let y = padding + CGFloat(rowIndex) * unit
+            let y = (grabberHeight + Self.padding) * scale + CGFloat(rowIndex) * unit
             var x = padding
 
             for slot in row {
@@ -512,6 +663,12 @@ final class FloatingKeyboardView: NSView {
     // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
+        let grabber = grabberRect
+        if grabber.insetBy(dx: -12, dy: -4).intersects(dirtyRect) {
+            (dragID == nil ? NSColor.secondaryLabelColor.withAlphaComponent(0.5) : NSColor.controlAccentColor).setFill()
+            NSBezierPath(roundedRect: grabber, xRadius: grabber.height / 2, yRadius: grabber.height / 2).fill()
+        }
+
         let pressedIndices = Set(pressedKeys.values)
         for (index, entry) in keys.enumerated() where entry.rect.insetBy(dx: -2, dy: -2).intersects(dirtyRect) {
             drawKey(entry.key, in: entry.rect, isPressed: pressedIndices.contains(index))
@@ -519,7 +676,7 @@ final class FloatingKeyboardView: NSView {
     }
 
     private func drawKey(_ key: KeyboardKey, in rect: NSRect, isPressed: Bool) {
-        let cornerRadius: CGFloat = 6
+        let cornerRadius: CGFloat = 6 * scale
 
         NSColor.keyEdge.setFill()
         NSBezierPath(roundedRect: rect.offsetBy(dx: 0, dy: 1), xRadius: cornerRadius, yRadius: cornerRadius).fill()
@@ -542,33 +699,38 @@ final class FloatingKeyboardView: NSView {
         let isShifted = latchedModifiers.contains(.maskShift)
 
         if key.role == .hide {
-            drawHideSymbol(in: rect, color: color)
+            drawSymbol("keyboard.chevron.compact.down", description: "Hide Keyboard", in: rect, color: color)
+            return
+        }
+        if key.role == .toggleSize {
+            drawSymbol(isCompact ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left",
+                       description: isCompact ? "Full-Size Keyboard" : "Mini Keyboard", in: rect, color: color)
             return
         }
 
         if key.role == .capsLock {
-            let indicator = NSRect(x: rect.minX + 7, y: rect.minY + 7, width: 6, height: 6)
+            let indicator = NSRect(x: rect.minX + 7 * scale, y: rect.minY + 7 * scale, width: 6 * scale, height: 6 * scale)
             (isCapsLockOn ? NSColor.systemGreen : NSColor.keyEdge).setFill()
             NSBezierPath(ovalIn: indicator).fill()
         }
 
         if key.alignment != .center {
             if let glyph = key.glyph {
-                drawText(glyph, font: .functionKeyGlyphFont, color: color, in: rect, horizontal: key.alignment, vertical: .top)
+                drawText(glyph, font: font(13), color: color, in: rect, horizontal: key.alignment, vertical: .top)
             }
-            drawText(key.label, font: .functionKeyFont, color: color, in: rect, horizontal: key.alignment, vertical: .bottom)
+            drawText(key.label, font: font(10), color: color, in: rect, horizontal: key.alignment, vertical: .bottom)
 
         } else if let shiftedLabel = key.shiftedLabel {
             let dimmed = color.withAlphaComponent(0.45)
-            drawText(shiftedLabel, font: .symbolKeyFont, color: isShifted ? color : dimmed, in: rect, horizontal: .center, vertical: .top)
-            drawText(key.label, font: .symbolKeyFont, color: isShifted ? dimmed : color, in: rect, horizontal: .center, vertical: .bottom)
+            drawText(shiftedLabel, font: font(14), color: isShifted ? color : dimmed, in: rect, horizontal: .center, vertical: .top)
+            drawText(key.label, font: font(14), color: isShifted ? dimmed : color, in: rect, horizontal: .center, vertical: .bottom)
 
         } else if key.isLetter {
             let label = (isShifted || isCapsLockOn) ? key.label.uppercased() : key.label
-            drawText(label, font: .letterKeyFont, color: color, in: rect, horizontal: .center, vertical: .center)
+            drawText(label, font: font(20), color: color, in: rect, horizontal: .center, vertical: .center)
 
         } else {
-            drawText(key.label, font: .arrowKeyFont, color: color, in: rect, horizontal: .center, vertical: .center)
+            drawText(key.label, font: font(11), color: color, in: rect, horizontal: .center, vertical: .center)
         }
     }
 
@@ -576,7 +738,7 @@ final class FloatingKeyboardView: NSView {
                           horizontal: KeyboardKey.Alignment, vertical: VerticalPlacement) {
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
         let size = (text as NSString).size(withAttributes: attributes)
-        let content = rect.insetBy(dx: 6, dy: 5)
+        let content = rect.insetBy(dx: 6 * scale, dy: 5 * scale)
 
         let x: CGFloat
         switch horizontal {
@@ -595,10 +757,15 @@ final class FloatingKeyboardView: NSView {
         (text as NSString).draw(at: NSPoint(x: x, y: y), withAttributes: attributes)
     }
 
-    private func drawHideSymbol(in rect: NSRect, color: NSColor) {
-        let configuration = NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
+    /// System font at `size` points for the full-size keyboard, scaled for the mini one.
+    private func font(_ size: CGFloat) -> NSFont {
+        NSFont.systemFont(ofSize: size * scale)
+    }
+
+    private func drawSymbol(_ name: String, description: String, in rect: NSRect, color: NSColor) {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 15 * scale, weight: .regular)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
-        guard let image = NSImage(systemSymbolName: "keyboard.chevron.compact.down", accessibilityDescription: "Hide Keyboard")?
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: description)?
             .withSymbolConfiguration(configuration) else { return }
 
         let size = image.size
@@ -618,30 +785,29 @@ private extension NSAppearance {
     var isDark: Bool { bestMatch(from: [.darkAqua, .aqua]) == .darkAqua }
 }
 
-private extension NSFont {
-    static let letterKeyFont = NSFont.systemFont(ofSize: 20)
-    static let symbolKeyFont = NSFont.systemFont(ofSize: 14)
-    static let arrowKeyFont = NSFont.systemFont(ofSize: 11)
-    static let functionKeyFont = NSFont.systemFont(ofSize: 10)
-    static let functionKeyGlyphFont = NSFont.systemFont(ofSize: 13)
-}
-
-
 class FloatingKeyboardPanel: NSPanel {
     let keyboardView: FloatingKeyboardView
     private weak var model: TouchMyMac?
+    private var userOrigin: NSPoint? // where the user last moved the panel
+    private static let compactDefaultsKey = "isFloatingKeyboardCompact"
 
     init(model: TouchMyMac) {
         self.model = model
         self.keyboardView = FloatingKeyboardView(model: model)
 
-        super.init(contentRect: NSRect(origin: .zero, size: FloatingKeyboardView.contentSize),
-                   styleMask: [.titled, .closable, .utilityWindow, .nonactivatingPanel, .fullSizeContentView],
+        let isCompact = UserDefaults.standard.bool(forKey: Self.compactDefaultsKey)
+        keyboardView.isCompact = isCompact
+        let size = FloatingKeyboardView.contentSize(scale: keyboardView.scale)
+
+        // No title bar: the keyboard's own handle and empty edge move it (see FloatingKeyboardView).
+        super.init(contentRect: NSRect(origin: .zero, size: size),
+                   styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered,
                    defer: true)
 
-        title = "Keyboard"
-        titlebarAppearsTransparent = true
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = true
         isFloatingPanel = true
         hidesOnDeactivate = false
         isReleasedWhenClosed = false
@@ -649,20 +815,16 @@ class FloatingKeyboardPanel: NSPanel {
         // other apps' floating windows and this app's own settings window.
         level = NSWindow.Level(Int(CGWindowLevelForKey(.assistiveTechHighWindow)))
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        standardWindowButton(.miniaturizeButton)?.isHidden = true
-        standardWindowButton(.zoomButton)?.isHidden = true
 
-        let background = NSVisualEffectView()
+        let background = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
         background.material = .hudWindow
         background.blendingMode = .behindWindow
         background.state = .active
+        background.maskImage = Self.roundedMask(radius: 14)
         contentView = background
 
-        // The content runs under the transparent title bar; size the window so the keys sit below it.
-        let titlebarHeight = frame.height - contentLayoutRect.height
-        let keyboardSize = FloatingKeyboardView.contentSize
-        setFrame(NSRect(x: 0, y: 0, width: keyboardSize.width, height: keyboardSize.height + titlebarHeight), display: false)
-        keyboardView.frame = contentLayoutRect
+        keyboardView.frame = background.bounds
+        keyboardView.autoresizingMask = [.width, .height]
         background.addSubview(keyboardView)
 
         model.floatingKeyboard = self
@@ -673,7 +835,10 @@ class FloatingKeyboardPanel: NSPanel {
 
     func makeVisible() {
         if !self.isVisible {
-            if let targetScreen = model?.touchscreen()?.systemScreen() ?? NSScreen.main {
+            if let userOrigin, let screen = NSScreen.screens.first(where: { $0.visibleFrame.contains(NSRect(origin: userOrigin, size: frame.size).center) }) {
+                // The screen layout may have changed since; keep it fully on screen.
+                setFrameOrigin(FloatingKeyboardView.snappedOrigin(userOrigin, size: frame.size, in: screen.visibleFrame))
+            } else if let targetScreen = model?.touchscreen()?.systemScreen() ?? NSScreen.main {
                 let visibleFrame = targetScreen.visibleFrame
                 let origin = CGPoint(
                     x: visibleFrame.midX - (frame.width / 2),
@@ -686,13 +851,59 @@ class FloatingKeyboardPanel: NSPanel {
         orderFrontRegardless()
     }
 
+    func rememberPosition() {
+        userOrigin = frame.origin
+    }
+
+    /// Switches between the full and the mini keyboard. The panel keeps its bottom edge and horizontal
+    /// center, or the screen edge it was snapped to, and the choice is remembered.
+    func setCompact(_ compact: Bool) {
+        guard compact != keyboardView.isCompact else { return }
+        let old = frame
+        keyboardView.isCompact = compact
+        UserDefaults.standard.set(compact, forKey: Self.compactDefaultsKey)
+
+        let size = FloatingKeyboardView.contentSize(scale: keyboardView.scale)
+        var origin = NSPoint(x: old.midX - size.width / 2, y: old.minY)
+        if let area = screen?.visibleFrame {
+            if abs(old.minX - area.minX) < 1 {
+                origin.x = area.minX
+            } else if abs(old.maxX - area.maxX) < 1 {
+                origin.x = area.maxX - size.width
+            }
+            if abs(old.maxY - area.maxY) < 1 {
+                origin.y = area.maxY - size.height
+            }
+            origin = FloatingKeyboardView.snappedOrigin(origin, size: size, in: area)
+        }
+        setFrame(NSRect(origin: origin, size: size), display: true)
+        rememberPosition()
+    }
+
     override func orderOut(_ sender: Any?) {
         keyboardView.reset()
         super.orderOut(sender)
+    }
+
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
     }
 
     override func close() {
         keyboardView.reset()
         super.close()
     }
+}
+
+
+private extension NSRect {
+    var center: NSPoint { NSPoint(x: midX, y: midY) }
 }
