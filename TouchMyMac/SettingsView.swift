@@ -263,6 +263,8 @@ struct SettingsView: View {
                 sectionDivider
                 settingToggleRow(labels: model.uiLabels(for: \.isThreeFingerSwipeEnabled), isOn: $model.isThreeFingerSwipeEnabled)
                 sectionDivider
+                settingToggleRow(labels: model.uiLabels(for: \.isThreeFingerSwipeSpacesEnabled), isOn: $model.isThreeFingerSwipeSpacesEnabled)
+                sectionDivider
                 settingToggleRow(labels: model.uiLabels(for: \.isFourFingerSwipeUpKeyboardEnabled), isOn: $model.isFourFingerSwipeUpKeyboardEnabled)
             }
 

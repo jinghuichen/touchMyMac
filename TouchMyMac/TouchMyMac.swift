@@ -51,6 +51,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var isSecondaryClickEnabled = false
     @Published var isMagnificationEnabled = false
     @Published var isThreeFingerSwipeEnabled = true
+    @Published var isThreeFingerSwipeSpacesEnabled = true
     @Published var isFourFingerSwipeUpKeyboardEnabled = true
     @Published var fiveFingerHoldShortcutSpec: String = "fn"
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
@@ -317,6 +318,8 @@ class TouchMyMac: NSObject, ObservableObject {
         case .TUCCursorGestureTwoFingerDrag: return "Two-Finger Drag"
         case .TUCCursorGesturePinch: return "Pinch"
         case .TUCCursorGestureThreeFingerSwipeUp: return "Three-Finger Swipe Up"
+        case .TUCCursorGestureThreeFingerSwipeLeft: return "Three-Finger Swipe Left"
+        case .TUCCursorGestureThreeFingerSwipeRight: return "Three-Finger Swipe Right"
         case .TUCCursorGestureFourFingerSwipeLeft: return "Four-Finger Swipe Left"
         case .TUCCursorGestureFiveFingerHold: return "Five-Finger Hold"
         case .TUCCursorGestureFourFingerSwipeUp: return "Four-Finger Swipe Up"
@@ -340,6 +343,8 @@ class TouchMyMac: NSObject, ObservableObject {
         case .keyboardShortcutSequence: return "Shortcut Sequence"
         case .floatingKeyboard: return "Floating Keyboard"
         case .hideFloatingKeyboard: return "Hide Floating Keyboard"
+        case .switchToLeftSpace: return "Space on the Left"
+        case .switchToRightSpace: return "Space on the Right"
         @unknown default: return "Unknown"
         }
     }
@@ -420,6 +425,7 @@ extension TouchMyMac {
             "isSecondaryClickEnabled" : true,
             "isMagnificationEnabled" : true,
             "isThreeFingerSwipeEnabled" : true,
+            "isThreeFingerSwipeSpacesEnabled" : true,
             "isFourFingerSwipeUpKeyboardEnabled" : true,
             "fiveFingerHoldShortcutSpec" : "fn",
             "fourFingerSwipeLeftSequenceSpec" : "cmd+a, delete",
@@ -444,6 +450,7 @@ extension TouchMyMac {
             $errorResistance.assign(to: \.errorResistance, on: touchManager),
             $ignoreOriginTouches.assign(to: \.ignoreOriginTouches, on: touchManager),
             $isThreeFingerSwipeEnabled.assign(to: \.threeFingerSwipeEnabled, on: touchManager),
+            $isThreeFingerSwipeSpacesEnabled.assign(to: \.threeFingerSwipeSpacesEnabled, on: touchManager),
             $isFourFingerSwipeUpKeyboardEnabled.assign(to: \.fourFingerSwipeUpKeyboardEnabled, on: touchManager),
             $fiveFingerHoldShortcutSpec.assign(to: \.fiveFingerHoldShortcutSpec, on: touchManager),
             $fourFingerSwipeLeftSequenceSpec.assign(to: \.fourFingerSwipeLeftSequenceSpec, on: touchManager),
@@ -458,6 +465,7 @@ extension TouchMyMac {
         isSecondaryClickEnabled = defaults.bool(forKey: "isSecondaryClickEnabled")
         isMagnificationEnabled = defaults.bool(forKey: "isMagnificationEnabled")
         isThreeFingerSwipeEnabled = defaults.bool(forKey: "isThreeFingerSwipeEnabled")
+        isThreeFingerSwipeSpacesEnabled = defaults.bool(forKey: "isThreeFingerSwipeSpacesEnabled")
         isFourFingerSwipeUpKeyboardEnabled = defaults.object(forKey: "isFourFingerSwipeUpKeyboardEnabled") as? Bool ?? true
         fiveFingerHoldShortcutSpec = defaults.string(forKey: "fiveFingerHoldShortcutSpec") ?? "fn"
         let savedFourFingerSequence = defaults.string(forKey: "fourFingerSwipeLeftSequenceSpec")
@@ -467,6 +475,7 @@ extension TouchMyMac {
             fourFingerSwipeLeftSequenceSpec = "cmd+a, delete"
         }
         touchManager.threeFingerSwipeEnabled = isThreeFingerSwipeEnabled
+        touchManager.threeFingerSwipeSpacesEnabled = isThreeFingerSwipeSpacesEnabled
         touchManager.fourFingerSwipeUpKeyboardEnabled = isFourFingerSwipeUpKeyboardEnabled
         touchManager.fiveFingerHoldShortcutSpec = fiveFingerHoldShortcutSpec
         touchManager.fourFingerSwipeLeftSequenceSpec = fourFingerSwipeLeftSequenceSpec
@@ -493,6 +502,7 @@ extension TouchMyMac {
         defaults.set(isSecondaryClickEnabled, forKey: "isSecondaryClickEnabled")
         defaults.set(isMagnificationEnabled, forKey: "isMagnificationEnabled")
         defaults.set(isThreeFingerSwipeEnabled, forKey: "isThreeFingerSwipeEnabled")
+        defaults.set(isThreeFingerSwipeSpacesEnabled, forKey: "isThreeFingerSwipeSpacesEnabled")
         defaults.set(isFourFingerSwipeUpKeyboardEnabled, forKey: "isFourFingerSwipeUpKeyboardEnabled")
         defaults.set(fiveFingerHoldShortcutSpec, forKey: "fiveFingerHoldShortcutSpec")
         defaults.set(fourFingerSwipeLeftSequenceSpec, forKey: "fourFingerSwipeLeftSequenceSpec")
@@ -597,6 +607,13 @@ extension TouchMyMac: TUCTouchDelegate {
 
         case .TUCCursorGestureThreeFingerSwipeUp:
             action = .missionControl
+
+        // Like a trackpad, the content follows the fingers: swiping left brings in the space on the right.
+        case .TUCCursorGestureThreeFingerSwipeLeft:
+            action = isThreeFingerSwipeSpacesEnabled ? .switchToRightSpace : .none
+
+        case .TUCCursorGestureThreeFingerSwipeRight:
+            action = isThreeFingerSwipeSpacesEnabled ? .switchToLeftSpace : .none
 
         case .TUCCursorGestureFourFingerSwipeLeft:
             action = .keyboardShortcutSequence
@@ -709,6 +726,10 @@ extension TouchMyMac {
         case \.isThreeFingerSwipeEnabled:
             return("Three-Finger Swipe Up",
                    "Swipe up with three fingers to open Mission Control.")
+
+        case \.isThreeFingerSwipeSpacesEnabled:
+            return("Three-Finger Swipe Left / Right",
+                   "Swipe left or right with three fingers to move between spaces and full-screen apps.")
 
         case \.isFourFingerSwipeUpKeyboardEnabled:
             return("Four-Finger Swipe Up Keyboard",

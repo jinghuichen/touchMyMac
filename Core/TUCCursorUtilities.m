@@ -1069,4 +1069,19 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
     CFRelease(controlUp);
 }
 
+- (void)switchSpaceToRight:(BOOL)toRight {
+    [self cancelMomentumScroll];
+    [self stopDraggingCursor];
+    [self stopMagnifying];
+
+    // The system shortcut is registered with the function flag that real arrow keys carry,
+    // so an arrow press without it doesn't switch spaces.
+    CGKeyCode arrow = toRight ? kVK_RightArrow : kVK_LeftArrow;
+    CGEventFlags arrowFlags = kCGEventFlagMaskControl | kCGEventFlagMaskSecondaryFn | kCGEventFlagMaskNumericPad;
+    [self postKeyboardEventForKeyCode:kControlKeyCode keyDown:YES flags:kCGEventFlagMaskControl];
+    [self postKeyboardEventForKeyCode:arrow keyDown:YES flags:arrowFlags];
+    [self postKeyboardEventForKeyCode:arrow keyDown:NO flags:arrowFlags];
+    [self postKeyboardEventForKeyCode:kControlKeyCode keyDown:NO flags:0];
+}
+
 @end

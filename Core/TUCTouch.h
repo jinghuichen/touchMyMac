@@ -24,7 +24,9 @@ typedef NS_OPTIONS(NSUInteger, TUCCursorGesture) {
     TUCCursorGestureFourFingerSwipeLeft = 1 << 10,
     TUCCursorGestureFiveFingerHold = 1 << 11,
     TUCCursorGestureFourFingerSwipeUp = 1 << 12,
-    TUCCursorGestureFourFingerSwipeDown = 1 << 13
+    TUCCursorGestureFourFingerSwipeDown = 1 << 13,
+    TUCCursorGestureThreeFingerSwipeLeft = 1 << 14,
+    TUCCursorGestureThreeFingerSwipeRight = 1 << 15
 };
 
 
@@ -41,7 +43,9 @@ typedef NS_ENUM(NSUInteger, TUCCursorAction) {
     TUCCursorActionKeyboardShortcutHold,
     TUCCursorActionKeyboardShortcutSequence,
     TUCCursorActionFloatingKeyboard,
-    TUCCursorActionHideFloatingKeyboard
+    TUCCursorActionHideFloatingKeyboard,
+    TUCCursorActionSwitchToLeftSpace,
+    TUCCursorActionSwitchToRightSpace
 };
 
 

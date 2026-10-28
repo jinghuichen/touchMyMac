@@ -78,6 +78,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property BOOL threeFingerSwipeEnabled;
 
 /**
+ Enables/disables switching spaces with a three-finger swipe left or right.
+ Default value is YES.
+ */
+@property BOOL threeFingerSwipeSpacesEnabled;
+
+/**
  Enables/disables four-finger swipe up recognition for the floating keyboard.
  Default value is YES.
  */
