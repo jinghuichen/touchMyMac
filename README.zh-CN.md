@@ -150,6 +150,12 @@ xattr -dr com.apple.quarantine /Applications/TouchMyMac.app
 </details>
 
 <details>
+<summary><b>触摸只会移动指针，而且是在指针当前所在的屏幕上</b></summary>
+
+很多为 Windows 设计的触摸屏开机时是单点鼠标模式，要电脑切换后才会发送多点触摸数据。TouchMyMac 现在会像 Windows 一样，在触摸屏连接时完成切换。如果触摸还是只会移动指针，把触摸屏的 USB 线拔掉重插；还不行的话，请附上 `hidutil list` 的输出提个 issue。
+</details>
+
+<details>
 <summary><b>输入跳动，或者触点卡住不放</b></summary>
 
 把 Error Resistance 调大，并保持 Ignore Origin Touches 打开。Diagnostics 页面会实时显示触摸数量和识别到的手势，方便定位问题。
