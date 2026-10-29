@@ -92,6 +92,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 
 | Setting | Default | What it does |
 |---|---|---|
+| Open at Login | Off | Start TouchMyMac when you log in (macOS 13 or later) |
 | Hold Duration | 0.1 s | How long to hold still before moving turns into a drag instead of a scroll |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
 | Scroll Inertia | On | Keep scrolling after a flick |

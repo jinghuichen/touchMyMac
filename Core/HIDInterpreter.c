@@ -46,6 +46,21 @@ Boolean gTouchscreenUsesHybridMode = FALSE;
 CFMutableArrayRef gContactIdentifiers;
 
 
+/**
+ Setup can fail right after login: a login item may start before its HID access is usable,
+ and the matching callback fires only once per device. So a failed setup retries for a while.
+ */
+static CFRunLoopTimerRef gSetupRetryTimer;
+static int gSetupRetryCount = 0;
+static const int kMaxSetupRetries = 15;
+static const CFTimeInterval kSetupRetryInterval = 2.0;
+static Boolean gManagerOpenFailed = FALSE; // values don't arrive even if a queue gets created
+
+static void ScheduleSetupRetry(void);
+static void CancelSetupRetry(void);
+static void TearDownHIDManager(void);
+
+
 #pragma mark General Debug Utilities
 
 
@@ -525,15 +540,19 @@ static void Handle_DeviceMatchingCallback(
     
     
     IOHIDQueueRef queue = IOHIDQueueCreate(kCFAllocatorDefault, inIOHIDDeviceRef, 1000, kNilOptions);
-    
-    if (CFGetTypeID(queue) != IOHIDQueueGetTypeID()) {
-        // this is not a valid HID queue reference!
+    if (queue == NULL) {
+        fprintf(stderr, "%s: IOHIDQueueCreate failed\n", __PRETTY_FUNCTION__);
+        ScheduleSetupRetry();
+        return;
     }
     
     IOHIDQueueRegisterValueAvailableCallback(queue, Handle_QueueValueAvailable, NULL);
     IOHIDQueueScheduleWithRunLoop(queue, gRunLoopRef, kCFRunLoopCommonModes);
     IOHIDQueueStart(queue);
     gQueue = queue;
+    if (!gManagerOpenFailed) {
+        CancelSetupRetry();
+    }
     
     TouchInputManagerDidConnectTouchscreen(gTouchManager);
     
@@ -619,9 +638,7 @@ void OpenHIDManager(void *delegate) {
     gTouchManager = delegate;
     
     // If Open is called twice within one process, make sure we start clean.
-    if (gHidManager != NULL) {
-        CloseHIDManager();
-    }
+    TearDownHIDManager();
     
     gHidManager = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     
@@ -663,8 +680,10 @@ void OpenHIDManager(void *delegate) {
                                     kCFRunLoopCommonModes);
 
     IOReturn openRes = IOHIDManagerOpen(gHidManager, kIOHIDOptionsTypeNone);
+    gManagerOpenFailed = openRes != kIOReturnSuccess;
     if (openRes != kIOReturnSuccess) {
         fprintf(stderr, "%s: IOHIDManagerOpen failed: 0x%x\n", __PRETTY_FUNCTION__, openRes);
+        ScheduleSetupRetry();
     }
 
     // Some systems don't reliably invoke the matching callback for already-attached devices
@@ -693,7 +712,37 @@ void OpenHIDManager(void *delegate) {
 
 
 
+static void RetrySetup(CFRunLoopTimerRef timer, void *info) {
+    gSetupRetryTimer = NULL;
+    fprintf(stderr, "%s: retrying HID setup (%d/%d)\n", __PRETTY_FUNCTION__, gSetupRetryCount, kMaxSetupRetries);
+    OpenHIDManager(gTouchManager); // a working connection cancels further retries
+}
+
+static void ScheduleSetupRetry(void) {
+    if (gSetupRetryTimer != NULL || gSetupRetryCount >= kMaxSetupRetries) {
+        return;
+    }
+    gSetupRetryCount++;
+    gSetupRetryTimer = CFRunLoopTimerCreate(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + kSetupRetryInterval,
+                                            0, 0, 0, RetrySetup, NULL);
+    CFRunLoopAddTimer(CFRunLoopGetMain(), gSetupRetryTimer, kCFRunLoopCommonModes);
+    CFRelease(gSetupRetryTimer); // the run loop keeps it until it fires
+}
+
+static void CancelSetupRetry(void) {
+    if (gSetupRetryTimer != NULL) {
+        CFRunLoopTimerInvalidate(gSetupRetryTimer);
+        gSetupRetryTimer = NULL;
+    }
+    gSetupRetryCount = 0;
+}
+
 void CloseHIDManager(void) {
+    CancelSetupRetry();
+    TearDownHIDManager();
+}
+
+static void TearDownHIDManager(void) {
     if (gQueue != NULL) {
         IOHIDQueueUnscheduleFromRunLoop(gQueue, gRunLoopRef, kCFRunLoopCommonModes);
         IOHIDQueueStop(gQueue);

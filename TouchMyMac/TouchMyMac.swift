@@ -7,6 +7,7 @@
 
 import AppKit
 import Combine
+import ServiceManagement
 import TouchUpCore
 
 struct DiagnosticsEvent: Identifiable {
@@ -36,6 +37,10 @@ class TouchMyMac: NSObject, ObservableObject {
     
     
     @Published var isPublishingMouseEventsEnabled = true
+
+    /// Mirrors the system's login item for this app, which the user can also change in System Settings.
+    @Published private(set) var opensAtLogin = false
+    @Published private(set) var openAtLoginNote: String?
     
     @Published var connectionState: ConnectionState = .disconnected
     
@@ -711,6 +716,10 @@ extension TouchMyMac {
             return("Control Mouse with Touch",
                    "Turns the driver on or off.")
             
+        case \.opensAtLogin:
+            return("Open at Login",
+                   "Starts TouchMyMac when you log in, so the touchscreen works right away.")
+
         case \.connectedTouchscreen:
             return("Assign Mouse Events to",
                    "Specifies which screen should receive the touch events.")
@@ -820,5 +829,49 @@ extension TUCScreen: Identifiable {
         else if sameName { return 0.5 }
         else if sameID { return 0.2 }
         else { return 0}
+    }
+}
+
+
+// MARK: - Open at Login
+extension TouchMyMac {
+
+    var canOpenAtLogin: Bool {
+        if #available(macOS 13.0, *) { return true }
+        return false
+    }
+
+    func refreshOpensAtLogin() {
+        guard #available(macOS 13.0, *) else {
+            opensAtLogin = false
+            openAtLoginNote = "Needs macOS 13 or later. Add TouchMyMac in System Settings → Users & Groups → Login Items instead."
+            return
+        }
+        let status = SMAppService.mainApp.status
+        opensAtLogin = status == .enabled
+        if status == .requiresApproval {
+            openAtLoginNote = "Turned off in System Settings → General → Login Items. Allow TouchMyMac there."
+        } else if openAtLoginNote?.hasPrefix("Turned off") == true {
+            openAtLoginNote = nil
+        }
+    }
+
+    func setOpensAtLogin(_ enabled: Bool) {
+        guard #available(macOS 13.0, *) else { return }
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            openAtLoginNote = nil
+        } catch {
+            openAtLoginNote = "Couldn't change the login item: \(error.localizedDescription)"
+            addDiagnosticsEvent("Open at Login failed: \(error.localizedDescription)")
+        }
+        refreshOpensAtLogin()
+        if enabled && SMAppService.mainApp.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
     }
 }
