@@ -83,6 +83,7 @@ static const CGFloat kScrollReanchorDistanceMM = 25.0f;
 static const NSTimeInterval kTouchInactivityTimeout = 0.12;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxHorizontalTravelMM = 18.0f;
+static const CGFloat kThreeFingerSwipeMaxVerticalTravelMM = 18.0f;
 static const CGFloat kFourFingerSwipeTriggerTravelMM = 20.0f;
 static const CGFloat kFourFingerSwipeMaxCrossTravelMM = 18.0f;
 static const NSInteger kStableTouchCountReports = 3; // a finger count must last this long to count for a gesture
@@ -760,6 +761,11 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
             && fabs(rightMM) <= kThreeFingerSwipeMaxHorizontalTravelMM) {
             gesture = TUCCursorGestureThreeFingerSwipeUp;
             self.debugThreeFingerTriggered = YES;
+        } else if (self.threeFingerSwipeSpacesEnabled && fabs(rightMM) >= kThreeFingerSwipeTriggerTravelMM
+                   && fabs(downMM) <= MIN(kThreeFingerSwipeMaxVerticalTravelMM, fabs(rightMM) * 0.5)) {
+            // Clearly sideways only, so a swipe up that drifts doesn't switch spaces instead of opening Mission Control.
+            gesture = rightMM < 0 ? TUCCursorGestureThreeFingerSwipeLeft : TUCCursorGestureThreeFingerSwipeRight;
+            self.debugThreeFingerTriggered = YES;
         }
     } else {
         BOOL mostlyVertical = fabs(rightMM) <= kFourFingerSwipeMaxCrossTravelMM;
@@ -975,6 +981,14 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         case TUCCursorActionHideFloatingKeyboard:
             [self.delegate performCustomAction:action];
             break;
+
+        case TUCCursorActionSwitchToLeftSpace:
+            [utils switchSpaceToRight:NO];
+            break;
+
+        case TUCCursorActionSwitchToRightSpace:
+            [utils switchSpaceToRight:YES];
+            break;
     }
 }
 
@@ -999,6 +1013,9 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         case TUCCursorGestureFiveFingerHold:    return TUCCursorActionKeyboardShortcutHold;
         case TUCCursorGestureFourFingerSwipeUp: return TUCCursorActionFloatingKeyboard;
         case TUCCursorGestureFourFingerSwipeDown:return TUCCursorActionHideFloatingKeyboard;
+        // Like a trackpad, the content follows the fingers: swiping left brings in the space on the right.
+        case TUCCursorGestureThreeFingerSwipeLeft: return TUCCursorActionSwitchToRightSpace;
+        case TUCCursorGestureThreeFingerSwipeRight:return TUCCursorActionSwitchToLeftSpace;
         case _TUCCursorGestureNone:             return TUCCursorActionNone;
     }
 }
@@ -1227,6 +1244,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         self.scrollInertiaVelocityMultiplier = 1.0;
         self.scrollSpeedMultiplier = 1.0;
         self.threeFingerSwipeEnabled = YES;
+        self.threeFingerSwipeSpacesEnabled = YES;
         self.fourFingerSwipeUpKeyboardEnabled = YES;
         self.fiveFingerHoldShortcutSpec = @"fn";
         self.fourFingerSwipeLeftSequenceSpec = @"cmd+a, delete";

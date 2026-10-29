@@ -34,7 +34,7 @@ TouchMyMac turns an external USB touchscreen into a real macOS input device. It 
 | 👆 **Direct touch** | Tap to click, drag to scroll, hold and move to drag, two-finger tap for a secondary click. |
 | 🌀 **Trackpad-like scrolling** | Scrolling follows the display's refresh rate, filters out touch jitter and hands over to inertia without a pause. |
 | ⌨️ **Floating keyboard** | A full Mac layout whose keys fire as you touch them, so fast, overlapping typing doesn't drop letters. |
-| 🖐 **Multi-finger gestures** | Mission Control, show or hide the keyboard, and configurable shortcuts on four- and five-finger gestures. |
+| 🖐 **Multi-finger gestures** | Mission Control, switching desktops, showing or hiding the keyboard, and configurable shortcuts on four- and five-finger gestures. |
 | 🩺 **Diagnostics** | Live connection state, touch counters and a gesture stream to tune noisy panels. |
 | 🔒 **User space only** | No kernel extension or driver install: one app, one Accessibility permission. |
 
@@ -48,6 +48,7 @@ TouchMyMac turns an external USB touchscreen into a real macOS input device. It 
 | Tap with two fingers | Secondary click, like on a Mac trackpad |
 | Pinch with two fingers | Zoom |
 | Swipe up with three fingers | Mission Control |
+| Swipe left / right with three fingers | Move between desktops and full-screen apps |
 | Swipe up / down with four fingers | Show / hide the floating keyboard (also over the keyboard) |
 | Swipe left with four fingers | Shortcut sequence (default `cmd+a, delete`) |
 | Hold five fingers still | Keep a shortcut pressed (default `fn`) |
@@ -99,7 +100,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Double Click Zone | 8 mm | How close two taps must be to count as a double click |
 | Error Resistance | 4 | Reports to wait before dropping a touch on panels that lose contacts |
 | Ignore Origin Touches | On | Ignore bogus touches at (0, 0) that some panels send |
-| Secondary Click / Magnification / Mission Control / Keyboard | On | Turn individual gestures on or off |
+| Secondary Click / Magnification / Mission Control / Desktops / Keyboard | On | Turn individual gestures on or off |
 | Five-Finger Hold Shortcut | `fn` | Chord held while five fingers rest on the screen |
 | Four-Finger Left Swipe Sequence | `cmd+a, delete` | Shortcuts fired by a four-finger left swipe |
 

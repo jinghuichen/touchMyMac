@@ -58,6 +58,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)performShortcutSequenceSpec:(NSString *)shortcutSequenceSpec;
 - (void)performMissionControl;
 
+/// Moves to the space on the right (YES) or left (NO), like Control-Right or Control-Left Arrow.
+- (void)switchSpaceToRight:(BOOL)toRight;
+
 
 @end
 
