@@ -868,9 +868,12 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
         gesturePhase = kCGGesturePhaseBegan;
     } else if (phase == NSTouchPhaseMoved || phase == NSTouchPhaseStationary) {
         gesturePhase = kCGGesturePhaseChanged;
+    } else if (phase == NSTouchPhaseCancelled) {
+        gesturePhase = kCGGesturePhaseCancelled;
     }
-    
-    CGEventSetIntegerValueField(event, 132, phase);
+
+    // The field takes the gesture phase. NSTouchPhaseEnded (8) would read as cancelled.
+    CGEventSetIntegerValueField(event, 132, gesturePhase);
     
     CGEventPost(kCGHIDEventTap, event);
     CFRelease(event);

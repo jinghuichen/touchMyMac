@@ -105,6 +105,14 @@ struct SettingsView: View {
         }
     }
 
+    private var opensAtLoginBinding: Binding<Bool> {
+        Binding {
+            model.opensAtLogin
+        } set: { enabled in
+            model.setOpensAtLogin(enabled)
+        }
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             sidebar
@@ -237,6 +245,20 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 8)
             }
+
+            SettingsGroup(title: "Startup") {
+                VStack(alignment: .leading, spacing: 0) {
+                    settingToggleRow(labels: model.uiLabels(for: \.opensAtLogin), isOn: opensAtLoginBinding)
+                        .disabled(!model.canOpenAtLogin)
+                    if let note = model.openAtLoginNote {
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.bottom, 8)
+                    }
+                }
+            }
+            .onAppear { model.refreshOpensAtLogin() }
 
             SettingsGroup(title: "Status") {
                 settingValueRow("Accessibility", value: model.accessibilityTrustedNow ? "Granted" : "Missing")
