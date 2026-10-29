@@ -26,6 +26,7 @@ IOHIDQueueRef gQueue;
 
 
 uint8_t gAreElementRefsSet = 0;
+Boolean gTouchscreenCollectionFound = FALSE; // values from other collections are ignored
 
 IOHIDElementRef         gApplicationCollectionElement;
 IOHIDElementRef         gScanTimeElement;
@@ -59,6 +60,8 @@ static Boolean gManagerOpenFailed = FALSE; // values don't arrive even if a queu
 static void ScheduleSetupRetry(void);
 static void CancelSetupRetry(void);
 static void TearDownHIDManager(void);
+static void StopCertificationRead(void);
+static IOHIDElementRef ApplicationCollectionOfElement(IOHIDElementRef element);
 
 
 #pragma mark General Debug Utilities
@@ -217,10 +220,10 @@ void IdentifyElements(IOHIDElementRef anyElement, Boolean printTree) {
     }
     
     gApplicationCollectionElement = applicationCollection;
-    
+    CFArrayRemoveAllValues(gTouchCollectionElements); // so a second pass doesn't list every contact twice
     
     CFArrayRef children = IOHIDElementGetChildren(applicationCollection);
-    CFIndex numChildren = CFArrayGetCount(children);
+    CFIndex numChildren = children != NULL ? CFArrayGetCount(children) : 0;
     
     if (printTree) {
         printf("# parent (type %u) has %ld children:\n", type, numChildren);
@@ -342,6 +345,19 @@ void PrintTouchCollection(IOHIDElementRef collection) {
  Dispatches touch data for the given collection, but only if all values needed were received
  */
 
+/**
+ Some panels declare X and Y with a report count of 2 and send the 16-bit value twice,
+ which macOS reads as one 32-bit value. Recover it when both halves agree.
+ */
+static CFIndex UnpackDuplicatedCoordinate(CFIndex value, CFIndex logicalMax) {
+    if (value <= logicalMax) {
+        return value;
+    }
+    CFIndex low = value & 0xFFFF;
+    CFIndex high = (value >> 16) & 0xFFFF;
+    return (low == high && low <= logicalMax) ? low : value;
+}
+
 void DispatchTouchDataForCollection(IOHIDElementRef collection) {
     
     CFArrayRef children = IOHIDElementGetChildren(collection);
@@ -370,14 +386,14 @@ void DispatchTouchDataForCollection(IOHIDElementRef collection) {
                 if (usage == kHIDUsage_GD_X) {
                     CGFloat min = (CGFloat)IOHIDElementGetLogicalMin(element);
                     CGFloat max = (CGFloat)IOHIDElementGetLogicalMax(element);
-                    CGFloat curr = (CGFloat)value;
+                    CGFloat curr = (CGFloat)UnpackDuplicatedCoordinate(value, IOHIDElementGetLogicalMax(element));
                     x = ( (curr - min) / (max - min) ) + min;
                 }
                 
                 else if (usage == kHIDUsage_GD_Y) {
                     CGFloat min = (CGFloat)IOHIDElementGetLogicalMin(element);
                     CGFloat max = (CGFloat)IOHIDElementGetLogicalMax(element);
-                    CGFloat curr = (CGFloat)value;
+                    CGFloat curr = (CGFloat)UnpackDuplicatedCoordinate(value, IOHIDElementGetLogicalMax(element));
                     y = ( (curr - min) / (max - min) ) + min;
                 }
             } //kHIDPage_GenericDesktop
@@ -490,13 +506,21 @@ static void Handle_InputValueCallback (
                 void *          inSender,       // the IOHIDManagerRef
                 IOHIDValueRef   inIOHIDValueRef // the new element value
 ) {
+    IOHIDElementRef elem = IOHIDValueGetElement(inIOHIDValueRef);
+
+    // A panel can share its interface with mouse or keyboard collections. In mouse emulation
+    // those are the only ones reporting, and they would be mistaken for the touch data.
+    if (gTouchscreenCollectionFound) {
+        IOHIDElementRef application = ApplicationCollectionOfElement(elem);
+        if (application == NULL || !CFEqual(application, gApplicationCollectionElement)) {
+            return;
+        }
+    }
+
     if(!gAreElementRefsSet) {
-        IOHIDElementRef e = IOHIDValueGetElement(inIOHIDValueRef);
-        IdentifyElements(e, TRUE);
+        IdentifyElements(elem, TRUE);
         gAreElementRefsSet = 1;
     }
-    
-    IOHIDElementRef elem = IOHIDValueGetElement(inIOHIDValueRef);
     
     if (gQueue == NULL) {
         // If we haven't set up the device queue yet, there's nowhere to route values.
@@ -520,6 +544,130 @@ static void Handle_InputValueCallback (
 
 
 
+#pragma mark - Multi-Touch Mode
+
+/// Usages Windows touch panels use to leave mouse emulation (not in IOHIDUsageTables.h).
+#define kTUCHIDUsage_Dig_DeviceMode 0x52
+#define kTUCDeviceModeMultiInput    2
+#define kTUCHIDPage_Vendor          0xFF00
+#define kTUCHIDUsage_Vendor_DeviceCertificationStatus 0xC5
+
+static const int kMaxCertificationReadAttempts = 20;
+static const CFTimeInterval kCertificationRetryInterval = 0.5;
+
+static CFRunLoopTimerRef gCertificationTimer;
+static IOHIDDeviceRef gCertificationDevice;
+static IOHIDElementRef gCertificationElement;
+static int gCertificationAttempts = 0;
+static uint8_t gCertificationBuffer[257];
+
+static IOHIDElementRef ApplicationCollectionOfElement(IOHIDElementRef element) {
+    for (IOHIDElementRef current = element; current != NULL; current = IOHIDElementGetParent(current)) {
+        if (IOHIDElementGetType(current) == kIOHIDElementTypeCollection
+            && IOHIDElementGetCollectionType(current) == kIOHIDElementCollectionTypeApplication) {
+            return current;
+        }
+    }
+    return NULL;
+}
+
+/// The first element of `device` with this type and usage, or NULL. Not retained.
+static IOHIDElementRef FindElement(IOHIDDeviceRef device, IOHIDElementType type, uint32_t page, uint32_t usage) {
+    CFArrayRef elements = IOHIDDeviceCopyMatchingElements(device, NULL, kIOHIDOptionsTypeNone);
+    if (elements == NULL) {
+        return NULL;
+    }
+    IOHIDElementRef found = NULL;
+    for (CFIndex i = 0; i < CFArrayGetCount(elements) && found == NULL; i++) {
+        IOHIDElementRef element = (IOHIDElementRef)CFArrayGetValueAtIndex(elements, i);
+        Boolean typeMatches = IOHIDElementGetType(element) == type
+            && (type != kIOHIDElementTypeCollection
+                || IOHIDElementGetCollectionType(element) == kIOHIDElementCollectionTypeApplication);
+        if (typeMatches && IOHIDElementGetUsagePage(element) == page && IOHIDElementGetUsage(element) == usage) {
+            found = element;
+        }
+    }
+    CFRelease(elements); // the device keeps its elements alive
+    return found;
+}
+
+static void StopCertificationRead(void) {
+    if (gCertificationTimer != NULL) {
+        CFRunLoopTimerInvalidate(gCertificationTimer);
+        gCertificationTimer = NULL;
+    }
+    if (gCertificationDevice != NULL) {
+        CFRelease(gCertificationDevice);
+        gCertificationDevice = NULL;
+    }
+    gCertificationElement = NULL;
+    gCertificationAttempts = 0;
+}
+
+static void ReadCertificationStatus(CFRunLoopTimerRef timer, void *info);
+
+static void Handle_CertificationReport(void *context, IOReturn result, void *sender, IOHIDReportType type,
+                                       uint32_t reportID, uint8_t *report, CFIndex reportLength) {
+    if (gCertificationDevice == NULL) {
+        return; // stopped while the read was pending
+    }
+    if (result == kIOReturnSuccess) {
+        fprintf(stderr, "%s: read the certification status, panel should leave mouse emulation\n", __PRETTY_FUNCTION__);
+        StopCertificationRead();
+    } else if (gCertificationAttempts >= kMaxCertificationReadAttempts) {
+        fprintf(stderr, "%s: certification status unreadable (0x%x), giving up\n", __PRETTY_FUNCTION__, result);
+        StopCertificationRead();
+    } else {
+        gCertificationTimer = CFRunLoopTimerCreate(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + kCertificationRetryInterval,
+                                                   0, 0, 0, ReadCertificationStatus, NULL);
+        CFRunLoopAddTimer(CFRunLoopGetMain(), gCertificationTimer, kCFRunLoopCommonModes);
+        CFRelease(gCertificationTimer); // the run loop keeps it until it fires
+    }
+}
+
+static void ReadCertificationStatus(CFRunLoopTimerRef timer, void *info) {
+    gCertificationTimer = NULL;
+    gCertificationAttempts++;
+    CFIndex length = sizeof(gCertificationBuffer);
+    // Asynchronous with a timeout: the first reads often time out while the controller settles.
+    IOReturn result = IOHIDDeviceGetReportWithCallback(gCertificationDevice, kIOHIDReportTypeFeature,
+                                                       IOHIDElementGetReportID(gCertificationElement),
+                                                       gCertificationBuffer, &length, 1.0,
+                                                       Handle_CertificationReport, gCertificationBuffer);
+    if (result != kIOReturnSuccess) {
+        Handle_CertificationReport(gCertificationBuffer, result, gCertificationDevice, kIOHIDReportTypeFeature, 0, gCertificationBuffer, 0);
+    }
+}
+
+/**
+ Many touch panels made for Windows start as a single absolute mouse and only send multi-touch
+ reports once the host switches them, which Windows does on connect and macOS never does.
+ Both ways are tried; panels already in multi-touch mode ignore them.
+ */
+static void EnableMultiTouchMode(IOHIDDeviceRef device) {
+    // The standard way: write Device Mode = Multi-Input.
+    IOHIDElementRef deviceMode = FindElement(device, kIOHIDElementTypeFeature, kHIDPage_Digitizer, kTUCHIDUsage_Dig_DeviceMode);
+    if (deviceMode != NULL && IOHIDElementGetLogicalMax(deviceMode) >= kTUCDeviceModeMultiInput) {
+        IOHIDValueRef value = IOHIDValueCreateWithIntegerValue(kCFAllocatorDefault, deviceMode, 0, kTUCDeviceModeMultiInput);
+        if (value != NULL) {
+            IOReturn result = IOHIDDeviceSetValue(device, deviceMode, value);
+            CFRelease(value);
+            fprintf(stderr, "%s: set Device Mode to multi-input: 0x%x\n", __PRETTY_FUNCTION__, result);
+        }
+    }
+
+    // Some controllers (e.g. ELAN) switch once the host reads their certification status instead.
+    StopCertificationRead();
+    IOHIDElementRef certification = FindElement(device, kIOHIDElementTypeFeature, kTUCHIDPage_Vendor,
+                                                kTUCHIDUsage_Vendor_DeviceCertificationStatus);
+    if (certification != NULL) {
+        gCertificationDevice = (IOHIDDeviceRef)CFRetain(device);
+        gCertificationElement = certification;
+        ReadCertificationStatus(NULL, NULL);
+    }
+}
+
+
 // this will be called when the HID Manager matches a new (hot plugged) HID device
 static void Handle_DeviceMatchingCallback(
             void *          inContext,       // context from IOHIDManagerRegisterDeviceMatchingCallback
@@ -530,12 +678,29 @@ static void Handle_DeviceMatchingCallback(
     printf("%s(context: %p, result: %p, sender: %p, device: %p).\n",
         __PRETTY_FUNCTION__, inContext, (void *) inResult, inSender, (void*) inIOHIDDeviceRef);
    
-    gAreElementRefsSet = 0;
-
     // This interpreter currently supports a single active touchscreen queue.
     // If we already have one, ignore additional matching callbacks.
     if (gQueue != NULL) {
         return;
+    }
+
+    // Find the touchscreen collection explicitly instead of from whichever value arrives first.
+    gAreElementRefsSet = 0;
+    IOHIDElementRef touchscreen = FindElement(inIOHIDDeviceRef, kIOHIDElementTypeCollection,
+                                              kHIDPage_Digitizer, kHIDUsage_Dig_TouchScreen);
+    gTouchscreenCollectionFound = touchscreen != NULL;
+    if (touchscreen != NULL) {
+        IdentifyElements(touchscreen, TRUE);
+        gAreElementRefsSet = 1;
+        if (CFArrayGetCount(gTouchCollectionElements) == 0) {
+            // A digitizer without contacts we can read (like a built-in one) must not take the
+            // single touchscreen slot from the panel that comes after it.
+            fprintf(stderr, "%s: skipping a touchscreen without readable contacts\n", __PRETTY_FUNCTION__);
+            gTouchscreenCollectionFound = FALSE;
+            gAreElementRefsSet = 0;
+            gApplicationCollectionElement = NULL;
+            return;
+        }
     }
     
     
@@ -553,6 +718,7 @@ static void Handle_DeviceMatchingCallback(
     if (!gManagerOpenFailed) {
         CancelSetupRetry();
     }
+    EnableMultiTouchMode(inIOHIDDeviceRef);
     
     TouchInputManagerDidConnectTouchscreen(gTouchManager);
     
@@ -584,6 +750,9 @@ static void Handle_RemovalCallback(
     if (gStoredInputValues != NULL) {
         CFDictionaryRemoveAllValues(gStoredInputValues);
     }
+    StopCertificationRead();
+    gAreElementRefsSet = 0;
+    gTouchscreenCollectionFound = FALSE;
     
     TouchInputManagerDidDisconnectTouchscreen(gTouchManager);
 }   // Handle_RemovalCallback
@@ -770,7 +939,9 @@ static void TearDownHIDManager(void) {
         gStoredInputValues = NULL;
     }
 
+    StopCertificationRead();
     gAreElementRefsSet = 0;
+    gTouchscreenCollectionFound = FALSE;
     gContactCount = 1;
     gHybridOffset = 0;
     gTouchscreenUsesHybridMode = FALSE;

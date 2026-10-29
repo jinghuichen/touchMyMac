@@ -150,6 +150,12 @@ Pick the touchscreen under Settings → General → Assign Mouse Events to. Touc
 </details>
 
 <details>
+<summary><b>Touches only move the pointer, on whichever display it's on</b></summary>
+
+Many touchscreens made for Windows start as a single-touch mouse until the computer switches them to multi-touch. TouchMyMac now does that when the screen connects, the way Windows does. If touches still only move the pointer, unplug the screen's USB cable and plug it back in. If that doesn't help, open an issue with the output of `hidutil list`.
+</details>
+
+<details>
 <summary><b>Input is jumpy or touches get stuck</b></summary>
 
 Raise Error Resistance and keep Ignore Origin Touches on. The Diagnostics pane shows live touch counts and the recognized gestures, which helps narrow it down.
