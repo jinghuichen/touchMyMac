@@ -4,7 +4,7 @@
 
 # TouchMyMac
 
-**把 iPad 式的触屏交互带到 macOS。**
+**让每一台 Mac 都能触控，不只是新款 MacBook Pro。**
 
 [English](README.md) · **简体中文**
 
@@ -20,12 +20,25 @@
 
 </div>
 
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-zh-dark.svg">
+  <img src="docs/images/hero-zh-light.svg" width="720" alt="在显示器上用触摸滚动、捏合缩放、切换桌面和呼出键盘">
+</picture>
+</p>
+
 TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备。它在用户态直接读取 HID 触摸数据，转换成点击、带惯性的滚动、拖拽、多指手势、快捷键和屏幕键盘，用起来不像在用鼠标模拟，而更接近 iPad。
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/keyboard-dark.png">
-  <img src="docs/images/keyboard-light.png" alt="浮动键盘：完整的 Mac 键盘布局">
-</picture>
+## 🍎 不只是新款 MacBook Pro 才能触控
+
+2026 年 10 月，苹果发布了第一台带触摸屏的 Mac：屏幕内置触控的 OLED MacBook Pro。它的触控只属于这台笔记本自己的屏幕。TouchMyMac 把类似的交互带给其他屏幕和其他 Mac：
+
+| | 触摸屏 MacBook Pro | TouchMyMac |
+|---|---|---|
+| **哪块屏幕** | 笔记本自带的屏幕 | 任何 USB 触摸屏：桌面显示器、便携屏、触控白板 |
+| **哪台 Mac** | 新款 MacBook Pro | 任何 macOS 12 或更高版本的 Mac |
+| **花费** | 随新款 MacBook Pro 提供 | 免费开源 |
+| **手势** | 滚动、捏合缩放、左右滑动翻页或切换桌面 | 同样支持，另有浮动键盘、三到五指手势、快捷键映射和可调的滚动手感 |
 
 ## ✨ 亮点
 
@@ -33,12 +46,18 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 |---|---|
 | 👆 **直接触控** | 轻点即点击，拖动即滚动，按住再移动即拖拽，双指轻点即右键。 |
 | 🌀 **触控板般的滚动** | 滚动跟随屏幕刷新率，过滤掉触摸抖动，松手后无停顿地转入惯性。 |
-| ⌨️ **浮动键盘** | 完整的 Mac 键盘布局，一按就出字，打字再快、手指再重叠也不会漏字。 |
 | 🖐 **多指手势** | 调出调度中心、切换桌面、显示或隐藏键盘，四指和五指手势可以绑定自定义快捷键。 |
+| ⌨️ **浮动键盘** | 完整的 Mac 键盘布局，一按就出字，打字再快、手指再重叠也不会漏字；还能缩成 mini 键盘。 |
+| 🔌 **兼容更多屏幕** | 自动把为 Windows 设计的触摸屏从单点鼠标模式切到多点触摸，并支持开机自启，开机就能用。 |
 | 🩺 **诊断工具** | 实时显示连接状态、触摸计数和手势识别结果，方便调校噪声较大的屏幕。 |
 | 🔒 **纯用户态** | 不需要内核扩展或额外安装驱动：一个 App，一项辅助功能权限。 |
 
 ## 🖐 手势
+
+<table>
+<tr><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/tap-dark.svg"><img src="docs/images/gestures/tap-light.svg" width="200" alt="轻点即点击"></picture><br><sub><b>轻点</b>即点击</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/scroll-dark.svg"><img src="docs/images/gestures/scroll-light.svg" width="200" alt="拖动滚动，轻甩带惯性"></picture><br><sub><b>拖动</b>滚动，轻甩带惯性</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/hold-drag-dark.svg"><img src="docs/images/gestures/hold-drag-light.svg" width="200" alt="按住再拖移动窗口"></picture><br><sub><b>按住再拖</b>移动窗口</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/two-finger-tap-dark.svg"><img src="docs/images/gestures/two-finger-tap-light.svg" width="200" alt="双指轻点即右键"></picture><br><sub><b>双指轻点</b>即右键</sub></td></tr>
+<tr><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/pinch-dark.svg"><img src="docs/images/gestures/pinch-light.svg" width="200" alt="双指捏合缩放"></picture><br><sub><b>双指捏合</b>缩放</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/mission-control-dark.svg"><img src="docs/images/gestures/mission-control-light.svg" width="200" alt="三指上滑调度中心"></picture><br><sub><b>三指上滑</b>调度中心</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/desktops-dark.svg"><img src="docs/images/gestures/desktops-light.svg" width="200" alt="三指左右滑切换桌面"></picture><br><sub><b>三指左右滑</b>切换桌面</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/keyboard-dark.svg"><img src="docs/images/gestures/keyboard-light.svg" width="200" alt="四指上滑呼出键盘"></picture><br><sub><b>四指上滑</b>呼出键盘</sub></td></tr>
+</table>
 
 | 手势 | 功能 |
 |---|---|
@@ -54,6 +73,11 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 | 五指按住不动 | 持续按住某个快捷键（默认 `fn`） |
 
 ## ⌨️ 浮动键盘
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/keyboard-dark.png">
+  <img src="docs/images/keyboard-light.png" alt="浮动键盘：完整的 Mac 键盘布局">
+</picture>
 
 - 完整的 Mac（美式 ANSI）布局，包含数字行、符号和方向键
 - 一按就出字（按下后 45 毫秒内，提前抬手则立即出字），每根手指各打各的键，快速打字不漏字
@@ -115,6 +139,7 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 | 显示器 | 状态 |
 |---|---|
 | LG Smart Monitor Swing | ✅ 本分支实测可用 |
+| ELAN 触摸屏、LG CreateBoard | 🧪 贡献者用自己的补丁跑通过（[#2](https://github.com/jinghuichen/touchMyMac/pull/2)、[#3](https://github.com/jinghuichen/touchMyMac/pull/3)）；这些修复已进入 1.5.0，但还没在 1.5.0 上确认 |
 | 其他 USB HID 触摸屏 | ❔ 如果在 Windows 上免驱可用，这里大概率也能用；尚未验证 |
 
 在别的屏幕上用起来了？欢迎提 issue 或 PR 把它加到这里。
@@ -191,6 +216,9 @@ docs/         README 用到的图片
 - [x] 完整 Mac 布局的浮动键盘
 - [x] 双指轻点右键
 - [x] 跟随屏幕刷新、过滤抖动、惯性无缝衔接的滚动
+- [x] 三指左右滑切换桌面
+- [x] 开机自启
+- [x] 把为 Windows 设计的触摸屏从鼠标模式切到多点触摸
 - [ ] 触控板手势事件，让更多 App 支持左右滑动翻页和边缘回弹
 - [ ] 把滚动放到独立线程，主线程忙的时候也不掉帧
 - [ ] 签名并公证的发布版本

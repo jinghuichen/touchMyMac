@@ -4,7 +4,7 @@
 
 # TouchMyMac
 
-**Bring iPad-like touchscreen interaction to macOS.**
+**Touch for every Mac, not just the new MacBook Pro.**
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -20,12 +20,25 @@
 
 </div>
 
+<p align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-en-dark.svg">
+  <img src="docs/images/hero-en-light.svg" width="720" alt="Scrolling, pinching, switching desktops and opening the keyboard with touch on a monitor">
+</picture>
+</p>
+
 TouchMyMac turns an external USB touchscreen into a real macOS input device. It reads raw HID touch data in user space and turns it into clicks, scrolling with inertia, dragging, multi-finger gestures, shortcut triggers and an on-screen keyboard, so the display feels less like a mouse emulator and more like an iPad.
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/keyboard-dark.png">
-  <img src="docs/images/keyboard-light.png" alt="The floating keyboard, a full Mac layout">
-</picture>
+## 🍎 Touch beyond the new MacBook Pro
+
+In October 2026 Apple announced the first Mac with a touchscreen: a MacBook Pro whose OLED display has touch built in. That touch belongs to the laptop's own screen. TouchMyMac brings the same kind of interaction to the screens and Macs that don't have it:
+
+| | MacBook Pro with touchscreen | TouchMyMac |
+|---|---|---|
+| **Which screen** | Its built-in display | Any USB touchscreen: desktop monitors, portable displays, touch boards |
+| **Which Mac** | The new MacBook Pro | Any Mac on macOS 12 or later |
+| **Cost** | Comes with the new MacBook Pro | Free and open source |
+| **Gestures** | Scrolling, pinch and swiping between pages or desktops | The same, plus a floating keyboard, three- to five-finger gestures, shortcut mappings and tunable scrolling |
 
 ## ✨ Highlights
 
@@ -33,12 +46,18 @@ TouchMyMac turns an external USB touchscreen into a real macOS input device. It 
 |---|---|
 | 👆 **Direct touch** | Tap to click, drag to scroll, hold and move to drag, two-finger tap for a secondary click. |
 | 🌀 **Trackpad-like scrolling** | Scrolling follows the display's refresh rate, filters out touch jitter and hands over to inertia without a pause. |
-| ⌨️ **Floating keyboard** | A full Mac layout whose keys fire as you touch them, so fast, overlapping typing doesn't drop letters. |
 | 🖐 **Multi-finger gestures** | Mission Control, switching desktops, showing or hiding the keyboard, and configurable shortcuts on four- and five-finger gestures. |
+| ⌨️ **Floating keyboard** | A full Mac layout whose keys fire as you touch them, so fast, overlapping typing doesn't drop letters. Shrinks to a mini keyboard. |
+| 🔌 **Works with more screens** | Switches touchscreens made for Windows out of single-touch mouse mode, and opens at login so the screen works right away. |
 | 🩺 **Diagnostics** | Live connection state, touch counters and a gesture stream to tune noisy panels. |
 | 🔒 **User space only** | No kernel extension or driver install: one app, one Accessibility permission. |
 
 ## 🖐 Gestures
+
+<table>
+<tr><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/tap-dark.svg"><img src="docs/images/gestures/tap-light.svg" width="200" alt="<b>Tap</b> to click"></picture><br><sub><b>Tap</b> to click</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/scroll-dark.svg"><img src="docs/images/gestures/scroll-light.svg" width="200" alt="<b>Drag</b> to scroll, flick to glide"></picture><br><sub><b>Drag</b> to scroll, flick to glide</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/hold-drag-dark.svg"><img src="docs/images/gestures/hold-drag-light.svg" width="200" alt="<b>Hold, then drag</b> to move"></picture><br><sub><b>Hold, then drag</b> to move</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/two-finger-tap-dark.svg"><img src="docs/images/gestures/two-finger-tap-light.svg" width="200" alt="<b>Two-finger tap</b> for a secondary click"></picture><br><sub><b>Two-finger tap</b> for a secondary click</sub></td></tr>
+<tr><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/pinch-dark.svg"><img src="docs/images/gestures/pinch-light.svg" width="200" alt="<b>Pinch</b> to zoom"></picture><br><sub><b>Pinch</b> to zoom</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/mission-control-dark.svg"><img src="docs/images/gestures/mission-control-light.svg" width="200" alt="<b>Three fingers up</b> for Mission Control"></picture><br><sub><b>Three fingers up</b> for Mission Control</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/desktops-dark.svg"><img src="docs/images/gestures/desktops-light.svg" width="200" alt="<b>Three fingers left / right</b> to switch desktops"></picture><br><sub><b>Three fingers left / right</b> to switch desktops</sub></td><td align="center" width="25%"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/images/gestures/keyboard-dark.svg"><img src="docs/images/gestures/keyboard-light.svg" width="200" alt="<b>Four fingers up</b> for the keyboard"></picture><br><sub><b>Four fingers up</b> for the keyboard</sub></td></tr>
+</table>
 
 | Gesture | Action |
 |---|---|
@@ -54,6 +73,11 @@ TouchMyMac turns an external USB touchscreen into a real macOS input device. It 
 | Hold five fingers still | Keep a shortcut pressed (default `fn`) |
 
 ## ⌨️ Floating keyboard
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/keyboard-dark.png">
+  <img src="docs/images/keyboard-light.png" alt="The floating keyboard, a full Mac layout">
+</picture>
 
 - Full Mac (US ANSI) layout with the number row, symbols and arrow keys
 - Keys fire as you touch them (within 45 ms, or as soon as you lift), and each finger types its own key, so fast typing doesn't drop letters
@@ -115,6 +139,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Display | Status |
 |---|---|
 | LG Smart Monitor Swing | ✅ Tested by this fork |
+| ELAN panels, LG CreateBoard | 🧪 Worked with contributors' patches ([#2](https://github.com/jinghuichen/touchMyMac/pull/2), [#3](https://github.com/jinghuichen/touchMyMac/pull/3)); those fixes are in 1.5.0 but not confirmed there yet |
 | Other USB HID touchscreens | ❔ Should work if they work on Windows without a driver; not validated yet |
 
 Have it working on another screen? Open an issue or PR to add it here.
@@ -191,6 +216,9 @@ docs/         README images
 - [x] Floating keyboard with a full Mac layout
 - [x] Two-finger tap for secondary click
 - [x] Display-synced, jitter-filtered scrolling with continuous inertia
+- [x] Three-finger swipe between desktops
+- [x] Open at Login
+- [x] Switch touchscreens made for Windows out of mouse mode
 - [ ] Trackpad gesture events, for swipe navigation and edge bounce in more apps
 - [ ] Scrolling on a dedicated thread, so a busy main thread can't drop frames
 - [ ] Signed and notarized releases
