@@ -580,17 +580,28 @@ final class FloatingKeyboardView: NSView {
         setNeedsDisplay(grabberRect.insetBy(dx: -12, dy: -4))
     }
 
+    /// The vertical center of the handle, which the size button lines up with.
+    private var grabberMidY: CGFloat {
+        (Self.grabberHeight / 2 + 2) * scale
+    }
+
     private var grabberRect: NSRect {
         let width: CGFloat = (dragID == nil ? 44 : 64) * scale
         let height = max(5 * scale, 3)
-        return NSRect(x: bounds.midX - width / 2, y: (Self.grabberHeight * scale - height) / 2 + 2 * scale, width: width, height: height)
+        return NSRect(x: bounds.midX - width / 2, y: grabberMidY - height / 2, width: width, height: height)
     }
 
-    /// The full/mini button at the right end of the top strip.
+    /// The full/mini button: level with the handle, its right edge on the keys' right edge.
+    private var sizeButtonIconRect: NSRect {
+        let side = 24 * scale
+        return NSRect(x: bounds.maxX - (Self.padding + Self.gap / 2) * scale - side, y: grabberMidY - side / 2,
+                      width: side, height: side)
+    }
+
+    /// Where a touch presses the size button: the icon plus the strip around it, short of the keys.
     private var sizeButtonRect: NSRect {
-        let width = 48 * scale
-        return NSRect(x: bounds.maxX - (Self.padding + Self.gap / 2) * scale - width, y: 0,
-                      width: width, height: Self.grabberHeight * scale)
+        let minX = sizeButtonIconRect.minX - 14 * scale
+        return NSRect(x: minX, y: 0, width: bounds.maxX - minX, height: (Self.grabberHeight + Self.padding / 2) * scale)
     }
 
     private func pressSizeButton(_ id: UUID) {
@@ -723,16 +734,15 @@ final class FloatingKeyboardView: NSView {
             NSBezierPath(roundedRect: grabber, xRadius: grabber.height / 2, yRadius: grabber.height / 2).fill()
         }
 
-        let sizeButton = sizeButtonRect
-        if sizeButton.intersects(dirtyRect) {
+        if sizeButtonRect.intersects(dirtyRect) {
+            let icon = sizeButtonIconRect
             let isPressed = sizeButtonID != nil
             if isPressed {
                 NSColor.controlAccentColor.setFill()
-                let face = sizeButton.insetBy(dx: 6 * scale, dy: 3 * scale)
-                NSBezierPath(roundedRect: face, xRadius: 6 * scale, yRadius: 6 * scale).fill()
+                NSBezierPath(roundedRect: icon, xRadius: 6 * scale, yRadius: 6 * scale).fill()
             }
             drawSymbol(isCompact ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left",
-                       description: isCompact ? "Full-Size Keyboard" : "Mini Keyboard", in: sizeButton,
+                       description: isCompact ? "Full-Size Keyboard" : "Mini Keyboard", in: icon,
                        color: isPressed ? .white : .secondaryLabelColor, pointSize: 13)
         }
 
