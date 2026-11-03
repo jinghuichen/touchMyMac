@@ -57,6 +57,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var isMagnificationEnabled = false
     @Published var isThreeFingerSwipeEnabled = true
     @Published var isThreeFingerSwipeSpacesEnabled = true
+    @Published var isControlDragEnabled = true
     @Published var isFourFingerSwipeUpKeyboardEnabled = true
     @Published var fiveFingerHoldShortcutSpec: String = "fn"
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
@@ -431,6 +432,7 @@ extension TouchMyMac {
             "isMagnificationEnabled" : true,
             "isThreeFingerSwipeEnabled" : true,
             "isThreeFingerSwipeSpacesEnabled" : true,
+            "isControlDragEnabled" : true,
             "isFourFingerSwipeUpKeyboardEnabled" : true,
             "fiveFingerHoldShortcutSpec" : "fn",
             "fourFingerSwipeLeftSequenceSpec" : "cmd+a, delete",
@@ -456,6 +458,7 @@ extension TouchMyMac {
             $ignoreOriginTouches.assign(to: \.ignoreOriginTouches, on: touchManager),
             $isThreeFingerSwipeEnabled.assign(to: \.threeFingerSwipeEnabled, on: touchManager),
             $isThreeFingerSwipeSpacesEnabled.assign(to: \.threeFingerSwipeSpacesEnabled, on: touchManager),
+            $isControlDragEnabled.assign(to: \.dragsControlsDirectly, on: touchManager),
             $isFourFingerSwipeUpKeyboardEnabled.assign(to: \.fourFingerSwipeUpKeyboardEnabled, on: touchManager),
             $fiveFingerHoldShortcutSpec.assign(to: \.fiveFingerHoldShortcutSpec, on: touchManager),
             $fourFingerSwipeLeftSequenceSpec.assign(to: \.fourFingerSwipeLeftSequenceSpec, on: touchManager),
@@ -471,6 +474,7 @@ extension TouchMyMac {
         isMagnificationEnabled = defaults.bool(forKey: "isMagnificationEnabled")
         isThreeFingerSwipeEnabled = defaults.bool(forKey: "isThreeFingerSwipeEnabled")
         isThreeFingerSwipeSpacesEnabled = defaults.bool(forKey: "isThreeFingerSwipeSpacesEnabled")
+        isControlDragEnabled = defaults.bool(forKey: "isControlDragEnabled")
         isFourFingerSwipeUpKeyboardEnabled = defaults.object(forKey: "isFourFingerSwipeUpKeyboardEnabled") as? Bool ?? true
         fiveFingerHoldShortcutSpec = defaults.string(forKey: "fiveFingerHoldShortcutSpec") ?? "fn"
         let savedFourFingerSequence = defaults.string(forKey: "fourFingerSwipeLeftSequenceSpec")
@@ -481,6 +485,7 @@ extension TouchMyMac {
         }
         touchManager.threeFingerSwipeEnabled = isThreeFingerSwipeEnabled
         touchManager.threeFingerSwipeSpacesEnabled = isThreeFingerSwipeSpacesEnabled
+        touchManager.dragsControlsDirectly = isControlDragEnabled
         touchManager.fourFingerSwipeUpKeyboardEnabled = isFourFingerSwipeUpKeyboardEnabled
         touchManager.fiveFingerHoldShortcutSpec = fiveFingerHoldShortcutSpec
         touchManager.fourFingerSwipeLeftSequenceSpec = fourFingerSwipeLeftSequenceSpec
@@ -508,6 +513,7 @@ extension TouchMyMac {
         defaults.set(isMagnificationEnabled, forKey: "isMagnificationEnabled")
         defaults.set(isThreeFingerSwipeEnabled, forKey: "isThreeFingerSwipeEnabled")
         defaults.set(isThreeFingerSwipeSpacesEnabled, forKey: "isThreeFingerSwipeSpacesEnabled")
+        defaults.set(isControlDragEnabled, forKey: "isControlDragEnabled")
         defaults.set(isFourFingerSwipeUpKeyboardEnabled, forKey: "isFourFingerSwipeUpKeyboardEnabled")
         defaults.set(fiveFingerHoldShortcutSpec, forKey: "fiveFingerHoldShortcutSpec")
         defaults.set(fourFingerSwipeLeftSequenceSpec, forKey: "fourFingerSwipeLeftSequenceSpec")
@@ -735,6 +741,10 @@ extension TouchMyMac {
         case \.isThreeFingerSwipeEnabled:
             return("Three-Finger Swipe Up",
                    "Swipe up with three fingers to open Mission Control.")
+
+        case \.isControlDragEnabled:
+            return("Drag Controls Directly",
+                   "Sliders, scroll bars, splitters and window title bars follow your finger right away. Elsewhere, dragging scrolls unless you hold still first.")
 
         case \.isThreeFingerSwipeSpacesEnabled:
             return("Three-Finger Swipe Left / Right",

@@ -9,6 +9,14 @@
 
 #import "HIDInterpreter.h"
 #import "TUCCursorUtilities.h"
+#import <ApplicationServices/ApplicationServices.h>
+
+/// What Accessibility reports under the finger that moves the cursor.
+typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
+    TUCControlUnderTouchPending,
+    TUCControlUnderTouchDraggable, // a slider, scroll bar, splitter or title bar: dragging moves it
+    TUCControlUnderTouchOther,
+};
 
 @interface TUCTouchInputManager ()
 
@@ -22,6 +30,8 @@
 @property (strong) NSDate *cursorTouchStationarySinceDate;
 @property (strong) NSDate *cursorTouchBeganDate;
 @property CGPoint cursorTouchStartLocation;
+@property TUCControlUnderTouch controlUnderCursorTouch;
+@property NSInteger controlLookupSession; // bumped per touch, so a late answer can't apply to the next touch
 @property TUCCursorAction lastPerformedAction;
 @property BOOL suppressEndedPrimaryTouchAction;
 @property BOOL cursorTouchStoppedMomentum; // the touch landed during inertia, so lifting it is not a click
@@ -77,6 +87,9 @@
 
 static const CGFloat kStationaryThresholdMM = 0.1f;
 static const CGFloat kTapCancelDistanceMM = 4.0f;
+static const NSTimeInterval kControlLookupWait = 0.08; // how long a moving finger waits for Accessibility's answer
+
+static BOOL TUCIsDraggableControlAtLocation(CGPoint location);
 static const CGFloat kTapFallbackDistanceMM = 5.0f;
 static const NSTimeInterval kTapFallbackDuration = 0.25;
 static const CGFloat kScrollReanchorDistanceMM = 25.0f;
@@ -358,6 +371,10 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         self.twoFingerTapPossible = YES;
         self.pendingTwoFingerTap = NO;
         self.cursorTouchStoppedMomentum = [TUCCursorUtilities sharedInstance].isMomentumScrolling;
+        self.controlUnderCursorTouch = TUCControlUnderTouchOther;
+        if (self.dragsControlsDirectly && isOnSurface) {
+            [self lookUpControlAtLocation:[self convertScreenPointRelativeToAbsolute:point]];
+        }
     }
 
     [touch setLocation: point];
@@ -628,8 +645,102 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         if ([self cursorTouchDistanceFromStartMM] <= kTapCancelDistanceMM) {
             return;
         }
+        if (self.lastPerformedAction != TUCCursorActionScroll && self.sessionMaxTouchCount < 2) {
+            if (self.controlUnderCursorTouch == TUCControlUnderTouchPending
+                && [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate] < kControlLookupWait) {
+                return; // the answer is usually back within a few milliseconds
+            }
+            if (self.controlUnderCursorTouch == TUCControlUnderTouchDraggable) {
+                [self beginControlDrag];
+                return;
+            }
+        }
         [self performMouseEventForGesture:TUCCursorGestureDrag];
     }
+}
+
+
+#pragma mark - Controls Under the Finger
+
+/**
+ Accessibility calls go to the app under the finger and can be slow, so they run on their own queue.
+ */
+- (void)lookUpControlAtLocation:(CGPoint)location {
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("TouchMyMac.controlLookup", DISPATCH_QUEUE_SERIAL);
+    });
+
+    NSInteger session = ++self.controlLookupSession;
+    self.controlUnderCursorTouch = TUCControlUnderTouchPending;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(queue, ^{
+        BOOL draggable = TUCIsDraggableControlAtLocation(location);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (strongSelf.controlLookupSession == session && strongSelf.controlUnderCursorTouch == TUCControlUnderTouchPending) {
+                strongSelf.controlUnderCursorTouch = draggable ? TUCControlUnderTouchDraggable : TUCControlUnderTouchOther;
+            }
+        });
+    });
+}
+
+/**
+ The finger moved on a control that follows a drag. Press where it landed, so the control
+ moves with the finger from there, and keep dragging until liftoff.
+ */
+- (void)beginControlDrag {
+    self.cursorTouchDidHold = YES;
+    [[TUCCursorUtilities sharedInstance] dragCursorTo:[self convertScreenPointRelativeToAbsolute:self.cursorTouchStartLocation]
+                                                phase:NSTouchPhaseBegan];
+    [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
+}
+
+static BOOL TUCRoleFollowsDrag(CFStringRef role, BOOL isElementUnderFinger) {
+    NSString *name = (__bridge NSString *)role;
+    static NSSet<NSString *> *roles;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        roles = [NSSet setWithArray:@[(__bridge NSString *)kAXSliderRole, (__bridge NSString *)kAXScrollBarRole,
+                                      (__bridge NSString *)kAXValueIndicatorRole, (__bridge NSString *)kAXSplitterRole,
+                                      (__bridge NSString *)kAXColorWellRole, (__bridge NSString *)kAXLevelIndicatorRole]];
+    });
+    // A window is only what's under the finger where nothing covers it, like the empty title bar.
+    return [roles containsObject:name] || (isElementUnderFinger && [name isEqualToString:(__bridge NSString *)kAXWindowRole]);
+}
+
+/// Whether the element under `location` (global display coordinates), or one of its two parents, follows a drag.
+static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
+    static AXUIElementRef systemWide;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        systemWide = AXUIElementCreateSystemWide();
+        AXUIElementSetMessagingTimeout(systemWide, 0.05); // an app that doesn't answer shouldn't hold up scrolling
+    });
+
+    AXUIElementRef current = NULL;
+    if (AXUIElementCopyElementAtPosition(systemWide, location.x, location.y, &current) != kAXErrorSuccess) {
+        return NO;
+    }
+    BOOL draggable = NO;
+    for (int depth = 0; depth < 3 && current != NULL && !draggable; depth++) {
+        CFTypeRef role = NULL;
+        if (AXUIElementCopyAttributeValue(current, kAXRoleAttribute, &role) == kAXErrorSuccess && role != NULL) {
+            draggable = CFGetTypeID(role) == CFStringGetTypeID() && TUCRoleFollowsDrag((CFStringRef)role, depth == 0);
+            CFRelease(role);
+        }
+        if (!draggable) {
+            CFTypeRef parent = NULL;
+            AXUIElementCopyAttributeValue(current, kAXParentAttribute, &parent);
+            CFRelease(current);
+            current = (AXUIElementRef)parent;
+        }
+    }
+    if (current != NULL) {
+        CFRelease(current);
+    }
+    return draggable;
 }
 
 
@@ -1245,6 +1356,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         self.scrollSpeedMultiplier = 1.0;
         self.threeFingerSwipeEnabled = YES;
         self.threeFingerSwipeSpacesEnabled = YES;
+        self.dragsControlsDirectly = YES;
         self.fourFingerSwipeUpKeyboardEnabled = YES;
         self.fiveFingerHoldShortcutSpec = @"fn";
         self.fourFingerSwipeLeftSequenceSpec = @"cmd+a, delete";

@@ -84,6 +84,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property BOOL threeFingerSwipeSpacesEnabled;
 
 /**
+ Drags sliders, scroll bars, splitters and window title bars as soon as the finger moves, instead of
+ scrolling unless the finger held still first. Uses Accessibility to see what is under the finger.
+ Default value is YES.
+ */
+@property BOOL dragsControlsDirectly;
+
+/**
  Enables/disables four-finger swipe up recognition for the floating keyboard.
  Default value is YES.
  */
