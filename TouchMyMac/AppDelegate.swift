@@ -23,6 +23,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @IBOutlet weak var activationMenuItem: NSMenuItem!
     
     var observers = [AnyCancellable]()
+
+    // Status rows at the top of the menu bar menu; the icon itself never changes.
+    let statusSummaryMenuItem = NSMenuItem()
+    let accessibilityStatusMenuItem = NSMenuItem()
+    let touchscreenStatusMenuItem = NSMenuItem()
     
     
     
@@ -49,16 +54,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ aNotification: Notification) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.statusItem.menu = self.statusMenu
-        
+        self.statusItem.button?.image = Self.menuBarIcon
+        self.statusItem.button?.toolTip = "TouchMyMac"
+        self.installStatusMenuItems()
+
+        // receive(on:) runs after @Published has stored the new value, so the refresh reads current state.
         self.observers.append(
-            self.model.$connectionState
-                .receive(on: DispatchQueue.main)
-                .sink{status in
-                    DispatchQueue.main.async {
-                        self.statusItem.button?.image = status.image
-                    }
-                    
-                }
+            Publishers.CombineLatest4(
+                self.model.$isAccessibilityAccessGranted,
+                self.model.$touchscreenDeviceName,
+                self.model.$screenAssignmentRevision,
+                self.model.$isPublishingMouseEventsEnabled
+            )
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshStatusMenu() }
         )
         
         self.observers.append(
@@ -113,6 +122,205 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func hideFloatingKeyboard() {
         self.floatingKeyboardPanel.orderOut(nil)
+    }
+}
+
+
+// MARK: - Menu Bar Status
+
+extension AppDelegate: NSMenuDelegate {
+
+    /// A monitor with a finger touching its lower right corner, drawn as a template so the menu bar tints it.
+    static let menuBarIcon: NSImage = {
+        let size = NSSize(width: 19, height: 16)
+        let hand = NSImage(systemSymbolName: "hand.point.up.left.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9.5, weight: .semibold))
+        let image = NSImage(size: size, flipped: false) { _ in
+            NSColor.black.set()
+            let screen = NSBezierPath(roundedRect: NSRect(x: 1.25, y: 4.25, width: 14.5, height: 10.5), xRadius: 2.2, yRadius: 2.2)
+            let stand = NSBezierPath()
+            stand.move(to: NSPoint(x: 8.5, y: 4.25))
+            stand.line(to: NSPoint(x: 8.5, y: 1.75))
+            stand.move(to: NSPoint(x: 5.5, y: 1.5))
+            stand.line(to: NSPoint(x: 11.5, y: 1.5))
+            for path in [screen, stand] {
+                path.lineWidth = 1.5
+                path.lineCapStyle = .round
+                path.lineJoinStyle = .round
+                path.stroke()
+            }
+            if let hand {
+                let rect = NSRect(x: size.width - hand.size.width - 0.2, y: 0, width: hand.size.width, height: hand.size.height)
+                // Cut a gap around the hand so it reads apart from the monitor outline.
+                for step in 0..<12 {
+                    let angle = CGFloat(step) * .pi / 6
+                    hand.draw(in: rect.offsetBy(dx: cos(angle) * 1.3, dy: sin(angle) * 1.3),
+                              from: .zero, operation: .destinationOut, fraction: 1)
+                }
+                hand.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
+            }
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = "TouchMyMac"
+        return image
+    }()
+
+    private enum StatusTone {
+        case good, warning, problem, neutral
+
+        var symbol: String {
+            switch self {
+            case .good: return "checkmark.circle.fill"
+            case .warning: return "exclamationmark.triangle.fill"
+            case .problem: return "xmark.circle.fill"
+            case .neutral: return "pause.circle.fill"
+            }
+        }
+
+        var color: NSColor {
+            switch self {
+            case .good: return .systemGreen
+            case .warning: return .systemOrange
+            case .problem: return .systemRed
+            case .neutral: return .systemGray
+            }
+        }
+    }
+
+    private static func statusIcon(_ tone: StatusTone) -> NSImage? {
+        statusIcon(symbol: tone.symbol, colors: [.white, tone.color])
+    }
+
+    private static func statusIcon(symbol: String, colors: [NSColor]) -> NSImage? {
+        let configuration = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
+            .applying(NSImage.SymbolConfiguration(paletteColors: colors))
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(configuration)
+        image?.isTemplate = false
+        return image
+    }
+
+    func installStatusMenuItems() {
+        statusMenu.delegate = self
+
+        accessibilityStatusMenuItem.target = self
+        accessibilityStatusMenuItem.action = #selector(openAccessibilitySettings(_:))
+        touchscreenStatusMenuItem.submenu = NSMenu()
+
+        let items = [statusSummaryMenuItem, accessibilityStatusMenuItem, touchscreenStatusMenuItem, .separator()]
+        for (index, item) in items.enumerated() {
+            statusMenu.insertItem(item, at: index)
+        }
+        refreshStatusMenu()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        guard menu == statusMenu else { return }
+        model.refreshAccessibilityStatus()
+        refreshStatusMenu()
+    }
+
+    func refreshStatusMenu() {
+        let accessibilityGranted = model.isAccessibilityAccessGranted
+        let deviceName = model.touchscreenDeviceName
+        let touchControlOn = model.isPublishingMouseEventsEnabled
+
+        // Summary: the one thing to look at first.
+        let summary: (String, StatusTone)
+        if !accessibilityGranted {
+            summary = ("Needs Accessibility permission", .warning)
+        } else if deviceName == nil {
+            summary = ("Waiting for a touchscreen", .problem)
+        } else if !touchControlOn {
+            summary = ("Touch control is paused", .neutral)
+        } else {
+            summary = ("Ready: touch control is on", .good)
+        }
+        statusSummaryMenuItem.attributedTitle = NSAttributedString(string: summary.0, attributes: [
+            .font: NSFont.menuFont(ofSize: 0).bold,
+            .foregroundColor: NSColor.labelColor,
+        ])
+        statusSummaryMenuItem.image = Self.statusIcon(summary.1)
+        statusSummaryMenuItem.isEnabled = false
+
+        if accessibilityGranted {
+            accessibilityStatusMenuItem.title = "Accessibility: Allowed"
+            accessibilityStatusMenuItem.image = Self.statusIcon(.good)
+            accessibilityStatusMenuItem.toolTip = "TouchMyMac may control the mouse and keyboard."
+        } else {
+            accessibilityStatusMenuItem.title = "Accessibility: Not Allowed – Open Settings…"
+            accessibilityStatusMenuItem.image = Self.statusIcon(.warning)
+            accessibilityStatusMenuItem.toolTip = "Turn on TouchMyMac in Privacy & Security → Accessibility. "
+                + "After an update, remove it from the list and add it again."
+        }
+
+        // The touchscreen row names the monitor touches land on; its submenu picks another one.
+        let display = model.connectedTouchscreen
+        if deviceName == nil {
+            touchscreenStatusMenuItem.title = "Touchscreen: Not Connected"
+            touchscreenStatusMenuItem.image = Self.statusIcon(.problem)
+            touchscreenStatusMenuItem.toolTip = "Connect the touchscreen's USB cable."
+        } else if let display {
+            touchscreenStatusMenuItem.title = "Touchscreen: \(display.name)"
+            touchscreenStatusMenuItem.image = Self.statusIcon(.good)
+            touchscreenStatusMenuItem.toolTip = "Touches land on this display. Pick another one if it's the wrong monitor."
+        } else {
+            touchscreenStatusMenuItem.title = "Touchscreen: No Display Found"
+            touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
+            touchscreenStatusMenuItem.toolTip = nil
+        }
+
+        refreshDisplayMenu()
+    }
+
+    private func refreshDisplayMenu() {
+        guard let submenu = touchscreenStatusMenuItem.submenu else { return }
+        let current = model.connectedTouchscreen
+        let remembered = model.isAssignedScreenRemembered
+
+        submenu.removeAllItems()
+        let header = NSMenuItem(title: "Touches Land On", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        submenu.addItem(header)
+
+        let automatic = NSMenuItem(title: "Automatic", action: #selector(useAutomaticDisplay(_:)), keyEquivalent: "")
+        automatic.target = self
+        automatic.state = remembered ? .off : .on
+        submenu.addItem(automatic)
+        submenu.addItem(.separator())
+
+        for screen in model.connectedScreens {
+            let title = screen.isBuiltin ? "\(screen.name) (This Mac)" : screen.name
+            let item = NSMenuItem(title: title, action: #selector(assignDisplay(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = NSNumber(value: screen.id)
+            // A dash marks the display Automatic chose; a checkmark marks one you picked.
+            if screen.id == current?.id {
+                item.state = remembered ? .on : .mixed
+            }
+            submenu.addItem(item)
+        }
+    }
+
+    @objc func useAutomaticDisplay(_ sender: NSMenuItem) {
+        model.useAutomaticTouchscreenDisplay()
+    }
+
+    @objc func assignDisplay(_ sender: NSMenuItem) {
+        guard let id = (sender.representedObject as? NSNumber)?.uintValue else { return }
+        model.assignTouchscreen(toScreenWithID: id)
+    }
+
+    @objc func openAccessibilitySettings(_ sender: Any?) {
+        model.openAccessibilitySettings()
+    }
+}
+
+
+private extension NSFont {
+    var bold: NSFont {
+        NSFontManager.shared.convert(self, toHaveTrait: .boldFontMask)
     }
 }
 

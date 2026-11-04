@@ -60,8 +60,7 @@ struct SettingsView: View {
         Binding {
             model.connectedTouchscreen?.id ?? 0
         } set: { value in
-            model.connectedTouchscreen = model.connectedScreens.first(where: { $0.id == value })
-            model.rememeberCues()
+            model.assignTouchscreen(toScreenWithID: value)
         }
     }
 
@@ -261,11 +260,11 @@ struct SettingsView: View {
             .onAppear { model.refreshOpensAtLogin() }
 
             SettingsGroup(title: "Status") {
-                settingValueRow("Accessibility", value: model.accessibilityTrustedNow ? "Granted" : "Missing")
+                settingValueRow("Accessibility", value: model.isAccessibilityAccessGranted ? "Granted" : "Missing")
                 sectionDivider
                 settingValueRow("Input Publishing", value: model.isPublishingMouseEventsEnabled ? "Enabled" : "Disabled")
                 sectionDivider
-                settingValueRow("Connection", value: String(describing: model.connectionState))
+                settingValueRow("Touchscreen", value: model.connectionState.displayName)
                 sectionDivider
                 settingValueRow("Assigned Screen", value: model.connectedTouchscreen?.name ?? "(Auto)")
             }
@@ -407,7 +406,7 @@ struct SettingsView: View {
                 diagnosticsTextLine("Accessibility (Cached)", model.isAccessibilityAccessGranted ? "Granted" : "Missing")
                 diagnosticsTextLine("Accessibility (Live)", model.accessibilityTrustedNow ? "Granted" : "Missing")
                 diagnosticsTextLine("Input Enabled", model.isPublishingMouseEventsEnabled ? "Yes" : "No")
-                diagnosticsTextLine("Connection", String(describing: model.connectionState))
+                diagnosticsTextLine("Connection", "\(model.connectionState) · \(model.touchscreenDeviceName ?? "no device")")
                 diagnosticsTextLine("Connected Screens", "\(model.connectedScreens.count)")
                 diagnosticsTextLine("Assigned Screen", model.connectedTouchscreen?.name ?? "(Auto)")
                 diagnosticsTextLine("Touch Reports", "\(model.touchUpdateCount)")

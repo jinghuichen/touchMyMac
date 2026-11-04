@@ -17,6 +17,7 @@
         self.id = displayID;
         
         self.rotation = CGDisplayRotation(displayID);
+        self.isBuiltin = CGDisplayIsBuiltin(displayID) != 0;
         
         
         self.physicalSize = CGDisplayScreenSize(displayID);

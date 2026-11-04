@@ -9,9 +9,13 @@
 #define HIDInterpreter_h
 
 #include <stdio.h>
+#include <CoreFoundation/CoreFoundation.h>
 
 void OpenHIDManager(void *delegate);
 
 void CloseHIDManager(void);
+
+/// Product name of the touchscreen being read, or NULL when none is connected. The caller releases it.
+CFStringRef HIDCopyActiveTouchscreenName(void);
 
 #endif /* HIDInterpreter_h */

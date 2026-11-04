@@ -20,6 +20,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property (strong, atomic) NSMutableSet<TUCTouch *> *touchSet;
 
+/// Product name of the touchscreen being read, or nil when none is connected.
+@property (nullable, readonly, copy) NSString *connectedTouchscreenName;
+
 /**
  Allows to deactiate that the framework processes touches to post them as mouse events.
  The default value is YES.

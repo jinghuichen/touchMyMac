@@ -19,6 +19,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property CGFloat rotation;
 @property CGSize physicalSize;
 @property CGRect frame;
+/// The Mac's own display (a MacBook panel), which is never the touchscreen.
+@property BOOL isBuiltin;
 
 - (CGFloat)pixelsPerMM;
 - (CGPoint)convertPointRelativeToAbsolute:(CGPoint)relativePoint;
