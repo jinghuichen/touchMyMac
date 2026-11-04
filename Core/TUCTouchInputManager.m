@@ -139,6 +139,11 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 }
 
 
+- (NSString *)connectedTouchscreenName {
+    CFStringRef name = HIDCopyActiveTouchscreenName();
+    return name == NULL ? nil : (NSString *)CFBridgingRelease(name);
+}
+
 - (void)didConnectTouchscreen {
     [self.delegate touchscreenDidConnect];
 }

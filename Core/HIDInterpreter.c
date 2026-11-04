@@ -24,6 +24,28 @@ static IOHIDManagerRef gHidManager;
 
 IOHIDQueueRef gQueue;
 
+// The device the queue reads from, and its product name, so removals of other digitizers are ignored.
+static IOHIDDeviceRef gActiveDevice = NULL;
+static CFStringRef gActiveDeviceName = NULL;
+
+static void ClearActiveDevice(void) {
+    gActiveDevice = NULL;
+    if (gActiveDeviceName != NULL) {
+        CFRelease(gActiveDeviceName);
+        gActiveDeviceName = NULL;
+    }
+}
+
+CFStringRef HIDCopyActiveTouchscreenName(void) {
+    if (gActiveDevice == NULL) {
+        return NULL;
+    }
+    if (gActiveDeviceName == NULL) {
+        return CFSTR("Touchscreen");
+    }
+    return CFRetain(gActiveDeviceName);
+}
+
 
 uint8_t gAreElementRefsSet = 0;
 Boolean gTouchscreenCollectionFound = FALSE; // values from other collections are ignored
@@ -715,6 +737,12 @@ static void Handle_DeviceMatchingCallback(
     IOHIDQueueScheduleWithRunLoop(queue, gRunLoopRef, kCFRunLoopCommonModes);
     IOHIDQueueStart(queue);
     gQueue = queue;
+    ClearActiveDevice();
+    gActiveDevice = inIOHIDDeviceRef;
+    CFTypeRef product = IOHIDDeviceGetProperty(inIOHIDDeviceRef, CFSTR(kIOHIDProductKey));
+    if (product != NULL && CFGetTypeID(product) == CFStringGetTypeID() && CFStringGetLength(product) > 0) {
+        gActiveDeviceName = CFRetain(product);
+    }
     if (!gManagerOpenFailed) {
         CancelSetupRetry();
     }
@@ -735,6 +763,11 @@ static void Handle_RemovalCallback(
 ) {
     printf("%s(context: %p, result: %p, sender: %p, device: %p).\n",
         __PRETTY_FUNCTION__, inContext, (void *) inResult, inSender, (void*) inIOHIDDeviceRef);
+    // Another digitizer (one skipped for having no readable contacts) went away: the touchscreen is still here.
+    if (gActiveDevice != NULL && inIOHIDDeviceRef != gActiveDevice) {
+        return;
+    }
+    ClearActiveDevice();
     if (gQueue != NULL) {
         IOHIDQueueStop(gQueue);
         CFRelease(gQueue);
@@ -912,6 +945,7 @@ void CloseHIDManager(void) {
 }
 
 static void TearDownHIDManager(void) {
+    ClearActiveDevice();
     if (gQueue != NULL) {
         IOHIDQueueUnscheduleFromRunLoop(gQueue, gRunLoopRef, kCFRunLoopCommonModes);
         IOHIDQueueStop(gQueue);

@@ -42,8 +42,15 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published private(set) var opensAtLogin = false
     @Published private(set) var openAtLoginNote: String?
     
-    @Published var connectionState: ConnectionState = .disconnected
-    
+    /// Derived from `touchscreenDeviceName` and the assigned display; set it through `updateConnectionState()`.
+    @Published private(set) var connectionState: ConnectionState = .disconnected
+
+    /// Product name of the connected touchscreen (HID device), nil while none is connected.
+    @Published private(set) var touchscreenDeviceName: String?
+
+    /// Bumped whenever the screen list or the assigned display changes, so the menu can refresh.
+    @Published private(set) var screenAssignmentRevision = 0
+
     
     
     @Published var holdDuration: TimeInterval = 0.1
@@ -124,96 +131,145 @@ class TouchMyMac: NSObject, ObservableObject {
             UserDefaults.standard.set(connectedTouchscreen.name, forKey: "touchscreenNameCue")
             UserDefaults.standard.set(connectedTouchscreen.id,   forKey: "touchscreenIDCue")
         }
+        updateConnectionState()
     }
-    
-    
+
+    /// Whether the user picked the assigned display (remembered), rather than it being chosen automatically.
+    var isAssignedScreenRemembered: Bool {
+        guard let screen = connectedTouchscreen else { return false }
+        let cues = identificationCues
+        return screen.matching(name: cues.name, id: cues.id) == 1
+    }
+
+    /// Forgets the picked display and lets the app choose the touchscreen's display again.
+    func useAutomaticTouchscreenDisplay() {
+        UserDefaults.standard.removeObject(forKey: "touchscreenNameCue")
+        UserDefaults.standard.removeObject(forKey: "touchscreenIDCue")
+        connectedTouchscreen = Self.likelyTouchscreen(in: connectedScreens)
+        updateConnectionState()
+        addDiagnosticsEvent("Touchscreen display set to automatic")
+    }
+
+    func assignTouchscreen(toScreenWithID id: UInt) {
+        guard let screen = connectedScreens.first(where: { $0.id == id }) else { return }
+        connectedTouchscreen = screen
+        rememeberCues()
+        addDiagnosticsEvent("Assigned touchscreen to \(screen.name)")
+    }
+
+    /// The connection state follows the HID device: connected while one is, whichever display it maps to.
+    func updateConnectionState() {
+        let state: ConnectionState
+        if touchscreenDeviceName == nil {
+            state = .disconnected
+        } else if connectedTouchscreen == nil {
+            state = .uncertain
+        } else {
+            state = isAssignedScreenRemembered ? .connectedPreferred : .connectedAuto
+        }
+        if connectionState != state {
+            connectionState = state
+        }
+        screenAssignmentRevision += 1
+    }
+
+
     /**
      returns true, if the screen list contained the preferred screen which is now assigned the touch screen.
      if screen list empty, it removes the assigned touch screen.
      */
     @discardableResult func identifyPreferredOrNoScreen() -> Bool {
         let cues = identificationCues
-        
-        
+
         if connectedScreens.count == 0 {
             self.connectedTouchscreen = nil
-            self.connectionState = .uncertain
-            print("OH NO SCREEN")
             return true
         }
-        
-       
-        
+
         if let perfectMatch = connectedScreens.first(where: { $0.matching(name: cues.name, id: cues.id) == 1}) {
             self.connectedTouchscreen = perfectMatch
-            self.connectionState = lastDateUSBAdded == nil ? .connectedPreferred : .connectedHotPlug
-            print("PREFERRED SCREEN FOUND")
             return true
         }
-        
+
         return false
     }
-    
-    
+
+
+    /// If the touchscreen's USB cable and a display both appeared within the last few seconds, they are the same monitor.
     @discardableResult func identifyHotPlug() -> Bool {
-        // if the USB cable of a touch screen was plugged in within last 10 seconds, assign this to the touchscreen
-        
-        // no need to hot plug during existing connection
-        if self.connectionState.isConnected {
-            print("HOTPLUG SKIPPED")
-            return false
-        }
-        
         if let lastDateUSBAdded, let lastDateScreenAdded, let idOfLastAddedScreen {
             if Date().timeIntervalSince(lastDateUSBAdded) < hotPlugTimeInterval
                 && Date().timeIntervalSince(lastDateScreenAdded) < hotPlugTimeInterval {
-                
-                
+
                 if let screen = self.connectedScreens.first(where: {$0.id == idOfLastAddedScreen}) {
                     self.connectedTouchscreen = screen
-                    let cues = identificationCues
-                    let match = screen.matching(name: cues.name, id: cues.id)
-                    self.connectionState = match == 1 ? .connectedPreferred : .connectedHotPlug
-                    print("HOTPLUG SUCCESS")
                     return true
                 }
-                
-                print("HOTPLUG FAIL")
             }
         }
-        
+
         return false
     }
-    
-    
+
+    /// A Mac's built-in panel has no touch, so the touchscreen is an external display.
+    /// The system lists the menu bar display first, so with several externals the last one is the best guess.
+    static func likelyTouchscreen(in screens: [TUCScreen]) -> TUCScreen? {
+        screens.last(where: { !$0.isBuiltin }) ?? screens.last
+    }
+
+    /// Keeps the current external display if it is still connected (the list holds fresh objects), else picks one.
+    private func keepOrPickFallbackScreen() {
+        if let current = connectedTouchscreen, !current.isBuiltin,
+           let same = connectedScreens.first(where: { $0.id == current.id }) {
+            connectedTouchscreen = same
+        } else {
+            connectedTouchscreen = Self.likelyTouchscreen(in: connectedScreens)
+        }
+    }
+
+
     @objc func screenParametersDidChange() {
         // identify which screen is newly added.
         let oldScreenList = self.connectedScreens
         self.connectedScreens = TUCScreen.allScreens() as! [TUCScreen]
-        
+
         // a new screen appeared!
         if connectedScreens.count > oldScreenList.count {
-            self.lastDateScreenAdded = Date()
-            
             let new = connectedScreens.first { s in
                 !(oldScreenList.contains(where: {$0.id == s.id}))
             }
             if let new {
+                self.lastDateScreenAdded = Date()
                 self.idOfLastAddedScreen = new.id
-                identifyHotPlug()
             }
         }
-        
-        // search for the preferred screen, also important if user rearranged screens (and screen numbers)
-        if !self.identifyPreferredOrNoScreen() {
-            self.connectedTouchscreen = self.connectedScreens.last
+
+        // the preferred screen wins, also important if user rearranged screens (and screen numbers)
+        if !self.identifyPreferredOrNoScreen() && !self.identifyHotPlug() {
+            keepOrPickFallbackScreen()
         }
+        updateConnectionState()
     }
-    
-    
+
+
     func checkAccessibilityAccessGranted() {
         let checkOptPrompt = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as NSString
         self.isAccessibilityAccessGranted = AXIsProcessTrustedWithOptions([checkOptPrompt: true] as CFDictionary?)
+    }
+
+    /// Re-reads the permission without showing the system prompt.
+    func refreshAccessibilityStatus() {
+        let granted = AXIsProcessTrusted()
+        if granted != isAccessibilityAccessGranted {
+            isAccessibilityAccessGranted = granted
+            addDiagnosticsEvent(granted ? "Accessibility access granted" : "Accessibility access missing")
+        }
+    }
+
+    func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
     }
     
     var accessibilityTrustedNow: Bool {
@@ -240,6 +296,10 @@ class TouchMyMac: NSObject, ObservableObject {
         
         NotificationCenter.default.addObserver(self, selector: #selector(TouchMyMac.screenParametersDidChange), name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
+        // Posted when any app's Accessibility permission changes; the new value is readable a moment later.
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(TouchMyMac.accessibilityPermissionsDidChange), name: NSNotification.Name("com.apple.accessibility.api"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(TouchMyMac.accessibilityPermissionsDidChange), name: NSApplication.didBecomeActiveNotification, object: nil)
+
         initPreferences()
         
         checkAccessibilityAccessGranted()
@@ -249,6 +309,19 @@ class TouchMyMac: NSObject, ObservableObject {
     
     deinit {
         NotificationCenter.default.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
+    }
+
+    @objc func accessibilityPermissionsDidChange() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.refreshAccessibilityStatus()
+        }
+    }
+
+    /// Stopping the HID manager drops the device without a removal callback; a restart reports it again.
+    private func forgetTouchscreenDevice() {
+        touchscreenDeviceName = nil
+        updateConnectionState()
     }
     
     func resetDiagnostics() {
@@ -280,20 +353,21 @@ class TouchMyMac: NSObject, ObservableObject {
     
     func restartInputPipeline() {
         touchManager.stop()
+        forgetTouchscreenDevice()
         touchManager.start()
         addDiagnosticsEvent("Restarted HID input pipeline")
     }
     
     func refreshTouchConnection() {
         addDiagnosticsEvent("Refreshing touch connection...")
-        connectionState = .uncertain
-        
+
         // Rebuild HID connection and then refresh screen mapping to avoid stale assignment.
         touchManager.stop()
+        forgetTouchscreenDevice()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             self.touchManager.start()
             self.screenParametersDidChange()
-            self.checkAccessibilityAccessGranted()
+            self.refreshAccessibilityStatus()
             self.addDiagnosticsEvent("Touch connection refresh requested")
         }
     }
@@ -585,7 +659,7 @@ extension TouchMyMac: TUCTouchDelegate {
     
     
     func touchscreen() -> TUCScreen? {
-        self.connectedTouchscreen ?? self.connectedScreens.last
+        self.connectedTouchscreen ?? Self.likelyTouchscreen(in: self.connectedScreens)
     }
 
     
@@ -660,18 +734,17 @@ extension TouchMyMac: TUCTouchDelegate {
     
     
     func touchscreenDidConnect() {
+        let name = touchManager.connectedTouchscreenName ?? "Touchscreen"
         performUIUpdate {
             self.hidConnectCount += 1
-            self.addDiagnosticsEvent("Touchscreen HID connected")
-            self.lastDateScreenAdded = Date()
-            
-            if !self.identifyHotPlug() {
-                if self.connectionState.isConnected {
-                    self.connectionState = .uncertain
-                }
+            self.addDiagnosticsEvent("Touchscreen HID connected: \(name)")
+            self.touchscreenDeviceName = name
+            self.lastDateUSBAdded = Date()
+
+            if !self.identifyPreferredOrNoScreen() && !self.identifyHotPlug() {
+                self.keepOrPickFallbackScreen()
             }
-            
-            self.identifyPreferredOrNoScreen()
+            self.updateConnectionState()
         }
     }
     
@@ -679,7 +752,8 @@ extension TouchMyMac: TUCTouchDelegate {
         performUIUpdate {
             self.hidDisconnectCount += 1
             self.addDiagnosticsEvent("Touchscreen HID disconnected")
-            self.connectionState = .disconnected
+            self.touchscreenDeviceName = nil
+            self.updateConnectionState()
         }
     }
 
@@ -802,30 +876,22 @@ extension TouchMyMac {
 
 
 enum ConnectionState: Int {
-    case uncertain
-    case disconnected
-    case connectedHotPlug // connected as result from hot plugging within a few seconds
-    case connectedPreferred // connected with stored cues matching perfectly
-    
-    var image: NSImage? {
-        let image: NSImage?
-        
-        switch self {
-        case .uncertain:
-            image = NSImage(systemSymbolName: "rectangle.dashed", accessibilityDescription: nil)
-        case .disconnected:
-            image = NSImage(systemSymbolName: "rectangle.badge.xmark", accessibilityDescription: nil)
-        default:
-            image = NSImage(systemSymbolName: "hand.point.up.left", accessibilityDescription: nil)
-        }
+    case uncertain // touchscreen connected, but no display to map it to
+    case disconnected // no touchscreen HID device
+    case connectedAuto // connected, mapped to a display picked automatically
+    case connectedPreferred // connected, mapped to the display the user picked
 
-        image?.isTemplate = true
-        
-        return image
-    }
-    
     var isConnected: Bool {
-        return self == .connectedPreferred || self == .connectedHotPlug
+        return self == .connectedPreferred || self == .connectedAuto
+    }
+
+    var displayName: String {
+        switch self {
+        case .uncertain: return "Connected, no display"
+        case .disconnected: return "Not connected"
+        case .connectedAuto: return "Connected (display picked automatically)"
+        case .connectedPreferred: return "Connected"
+        }
     }
 }
                  
