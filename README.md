@@ -85,7 +85,8 @@ In October 2026 Apple announced the first Mac with a touchscreen: a MacBook Pro 
 - Delete, space and the arrow keys repeat while held
 - Floats above every other window; drag it by the handle on top or its empty edge, and it remembers where you put it
 - Hide it with the hide key or a four-finger swipe down, which also works with your fingers on the keyboard
-- Shrink it to a mini keyboard (the same layout at 60% size) with the key next to the hide key; it remembers the size
+- The 🌐 key next to the hide key switches input sources, for example between English and Pinyin. It uses your own shortcut from Keyboard Shortcuts → Input Sources, and its cap shows the current input source
+- Shrink it to a mini keyboard (the same layout at 60% size) with the button at the top right; it remembers the size
 
 ## 🌀 How scrolling works
 

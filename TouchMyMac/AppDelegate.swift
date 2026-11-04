@@ -9,6 +9,7 @@ import Cocoa
 import SwiftUI
 import Combine
 import Carbon.HIToolbox
+import TouchUpCore
 
 
 @main
@@ -237,7 +238,7 @@ struct KeyboardKey {
         case modifier(CGEventFlags) // sticky: applies to the next key press
         case capsLock
         case hide
-        case toggleSize // switches between the full and the mini keyboard
+        case inputSource // switches the input source, like the globe key or ⌃Space
     }
 
     enum Alignment {
@@ -299,7 +300,7 @@ final class FloatingKeyboardView: NSView {
     private static let unit: CGFloat = 56
     private static let gap: CGFloat = 6
     private static let padding: CGFloat = 10
-    private static let grabberHeight: CGFloat = 22 // drag handle strip above the keys
+    private static let grabberHeight: CGFloat = 30 // drag handle strip above the keys, with the size button
     private static let edgeSnapDistance: CGFloat = 28 // closer than this to a screen edge, the panel sticks to it
     /// Keys fire this long after touch down (or on liftoff, if sooner), so four fingers landing on the
     /// keyboard for a swipe are recognized as a gesture before any of them types.
@@ -350,7 +351,7 @@ final class FloatingKeyboardView: NSView {
             ],
         [
             .key(KeyboardKey(label: "", role: .hide)),
-            .key(KeyboardKey(label: "", role: .toggleSize)),
+            .key(KeyboardKey(label: "", role: .inputSource)),
             .key(.modifier("control", glyph: "⌃", flag: .maskControl, width: 1, alignment: .leading)),
             .key(.modifier("option", glyph: "⌥", flag: .maskAlternate, width: 1, alignment: .leading)),
             .key(.modifier("command", glyph: "⌘", flag: .maskCommand, width: 1.25, alignment: .leading)),
@@ -390,6 +391,10 @@ final class FloatingKeyboardView: NSView {
     private var isPartOfGesture = false // the current touches are a multi-finger gesture, not key presses
     private let mousePressID = UUID()
 
+    private var sizeButtonID: UUID? // the touch (or mouse) pressing the full/mini button in the top strip
+    private var inputSourceLabel = InputSourceSwitcher.currentShortName()
+    private var inputSourceObserver: NSObjectProtocol?
+
     // Moving the panel by its handle or empty edge.
     private var dragID: UUID?
     private var dragStartLocation = NSPoint.zero // screen coordinates
@@ -398,6 +403,17 @@ final class FloatingKeyboardView: NSView {
     init(model: TouchMyMac) {
         self.model = model
         super.init(frame: NSRect(origin: .zero, size: Self.contentSize(scale: 1)))
+        inputSourceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.refreshInputSourceLabel()
+        }
+    }
+
+    deinit {
+        if let inputSourceObserver {
+            DistributedNotificationCenter.default().removeObserver(inputSourceObserver)
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -421,7 +437,9 @@ final class FloatingKeyboardView: NSView {
         if isPartOfGesture {
             return true // keep it out of cursor handling; it only counts toward the gesture
         }
-        if let index = keyIndex(at: point) {
+        if sizeButtonRect.contains(point) {
+            pressSizeButton(touchID)
+        } else if let index = keyIndex(at: point) {
             press(index, id: touchID)
         } else {
             beginDrag(touchID, at: screenPoint)
@@ -439,6 +457,13 @@ final class FloatingKeyboardView: NSView {
         if touchID == dragID {
             endDrag()
         }
+        if touchID == sizeButtonID {
+            sizeButtonID = nil
+            setNeedsDisplay(sizeButtonRect)
+            if !isPartOfGesture {
+                (window as? FloatingKeyboardPanel)?.setCompact(!isCompact)
+            }
+        }
         if let pending = pendingCommits.removeValue(forKey: touchID) {
             // Lifted before the commit delay ran out: type the key now.
             pending.invalidate()
@@ -448,7 +473,7 @@ final class FloatingKeyboardView: NSView {
         if let index = pressedKeys.removeValue(forKey: touchID) {
             setNeedsDisplay(keys[index].rect.insetBy(dx: -2, dy: -2))
         }
-        if pressedKeys.isEmpty && dragID == nil {
+        if pressedKeys.isEmpty && dragID == nil && sizeButtonID == nil {
             isPartOfGesture = false
         }
     }
@@ -461,6 +486,7 @@ final class FloatingKeyboardView: NSView {
         repeatTimers.values.forEach { $0.invalidate() }
         repeatTimers.removeAll()
         pressedKeys.removeAll()
+        sizeButtonID = nil
         endDrag()
         needsDisplay = true
     }
@@ -471,6 +497,7 @@ final class FloatingKeyboardView: NSView {
         repeatTimers.values.forEach { $0.invalidate() }
         repeatTimers.removeAll()
         pressedKeys.removeAll()
+        sizeButtonID = nil
         endDrag()
         isPartOfGesture = false
         latchedModifiers = []
@@ -479,7 +506,10 @@ final class FloatingKeyboardView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if let index = keyIndex(at: convert(event.locationInWindow, from: nil)) {
+        let point = convert(event.locationInWindow, from: nil)
+        if sizeButtonRect.contains(point) {
+            pressSizeButton(mousePressID)
+        } else if let index = keyIndex(at: point) {
             press(index, id: mousePressID)
         } else {
             beginDrag(mousePressID, at: NSEvent.mouseLocation)
@@ -550,10 +580,43 @@ final class FloatingKeyboardView: NSView {
         setNeedsDisplay(grabberRect.insetBy(dx: -12, dy: -4))
     }
 
+    /// The vertical center of the handle, which the size button lines up with.
+    private var grabberMidY: CGFloat {
+        (Self.grabberHeight / 2 + 2) * scale
+    }
+
     private var grabberRect: NSRect {
         let width: CGFloat = (dragID == nil ? 44 : 64) * scale
         let height = max(5 * scale, 3)
-        return NSRect(x: bounds.midX - width / 2, y: (Self.grabberHeight * scale - height) / 2 + 2 * scale, width: width, height: height)
+        return NSRect(x: bounds.midX - width / 2, y: grabberMidY - height / 2, width: width, height: height)
+    }
+
+    /// The full/mini button: level with the handle, its right edge on the keys' right edge.
+    private var sizeButtonIconRect: NSRect {
+        let side = 24 * scale
+        return NSRect(x: bounds.maxX - (Self.padding + Self.gap / 2) * scale - side, y: grabberMidY - side / 2,
+                      width: side, height: side)
+    }
+
+    /// Where a touch presses the size button: the icon plus the strip around it, short of the keys.
+    private var sizeButtonRect: NSRect {
+        let minX = sizeButtonIconRect.minX - 14 * scale
+        return NSRect(x: minX, y: 0, width: bounds.maxX - minX, height: (Self.grabberHeight + Self.padding / 2) * scale)
+    }
+
+    private func pressSizeButton(_ id: UUID) {
+        guard sizeButtonID == nil else { return }
+        sizeButtonID = id
+        setNeedsDisplay(sizeButtonRect)
+    }
+
+    private func refreshInputSourceLabel() {
+        let label = InputSourceSwitcher.currentShortName()
+        guard label != inputSourceLabel else { return }
+        inputSourceLabel = label
+        if let index = keys.firstIndex(where: { $0.key.role == .inputSource }) {
+            setNeedsDisplay(keys[index].rect.insetBy(dx: -2, dy: -2))
+        }
     }
 
     private func keyIndex(at point: NSPoint) -> Int? {
@@ -590,8 +653,10 @@ final class FloatingKeyboardView: NSView {
         case .hide:
             window?.orderOut(nil)
 
-        case .toggleSize:
-            (window as? FloatingKeyboardPanel)?.setCompact(!isCompact)
+        case .inputSource:
+            if let touchManager = model?.touchManager {
+                InputSourceSwitcher.switchToPrevious(using: touchManager)
+            }
 
         case .character:
             var flags = latchedModifiers
@@ -669,6 +734,18 @@ final class FloatingKeyboardView: NSView {
             NSBezierPath(roundedRect: grabber, xRadius: grabber.height / 2, yRadius: grabber.height / 2).fill()
         }
 
+        if sizeButtonRect.intersects(dirtyRect) {
+            let icon = sizeButtonIconRect
+            let isPressed = sizeButtonID != nil
+            if isPressed {
+                NSColor.controlAccentColor.setFill()
+                NSBezierPath(roundedRect: icon, xRadius: 6 * scale, yRadius: 6 * scale).fill()
+            }
+            drawSymbol(isCompact ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left",
+                       description: isCompact ? "Full-Size Keyboard" : "Mini Keyboard", in: icon,
+                       color: isPressed ? .white : .secondaryLabelColor, pointSize: 13)
+        }
+
         let pressedIndices = Set(pressedKeys.values)
         for (index, entry) in keys.enumerated() where entry.rect.insetBy(dx: -2, dy: -2).intersects(dirtyRect) {
             drawKey(entry.key, in: entry.rect, isPressed: pressedIndices.contains(index))
@@ -702,9 +779,11 @@ final class FloatingKeyboardView: NSView {
             drawSymbol("keyboard.chevron.compact.down", description: "Hide Keyboard", in: rect, color: color)
             return
         }
-        if key.role == .toggleSize {
-            drawSymbol(isCompact ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left",
-                       description: isCompact ? "Full-Size Keyboard" : "Mini Keyboard", in: rect, color: color)
+        if key.role == .inputSource {
+            // Like the globe key on a Mac keyboard, with the current input source on the cap.
+            let corner = NSRect(x: rect.minX + 4 * scale, y: rect.maxY - 20 * scale, width: 16 * scale, height: 16 * scale)
+            drawSymbol("globe", description: "Switch Input Source", in: corner, color: color, pointSize: 11)
+            drawText(inputSourceLabel, font: font(15), color: color, in: rect, horizontal: .center, vertical: .center)
             return
         }
 
@@ -762,8 +841,8 @@ final class FloatingKeyboardView: NSView {
         NSFont.systemFont(ofSize: size * scale)
     }
 
-    private func drawSymbol(_ name: String, description: String, in rect: NSRect, color: NSColor) {
-        let configuration = NSImage.SymbolConfiguration(pointSize: 15 * scale, weight: .regular)
+    private func drawSymbol(_ name: String, description: String, in rect: NSRect, color: NSColor, pointSize: CGFloat = 15) {
+        let configuration = NSImage.SymbolConfiguration(pointSize: pointSize * scale, weight: .regular)
             .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: description)?
             .withSymbolConfiguration(configuration) else { return }
@@ -771,6 +850,72 @@ final class FloatingKeyboardView: NSView {
         let size = image.size
         let imageRect = NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height)
         image.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
+}
+
+
+/**
+ Switches keyboard input sources the way the user's own shortcut does, and names the current one for the key cap.
+ */
+enum InputSourceSwitcher {
+    /// "Select the previous input source" under Keyboard Shortcuts → Input Sources.
+    private static let previousSourceHotKey = "60"
+    private static let defaultShortcut = (keyCode: CGKeyCode(kVK_Space), flags: CGEventFlags.maskControl)
+
+    /// Toggles back to the previous input source, so one tap goes between, say, English and Pinyin.
+    static func switchToPrevious(using touchManager: TUCTouchInputManager) {
+        switch previousSourceShortcut() {
+        case .some(let shortcut):
+            touchManager.performKeyCode(shortcut.keyCode, modifierFlags: shortcut.flags)
+        case .none:
+            selectNextSource()
+        }
+    }
+
+    /// The shortcut as set in System Settings: ⌃Space unless the user changed it, nil if it's turned off.
+    private static func previousSourceShortcut() -> (keyCode: CGKeyCode, flags: CGEventFlags)? {
+        guard let hotKeys = UserDefaults(suiteName: "com.apple.symbolichotkeys")?.dictionary(forKey: "AppleSymbolicHotKeys"),
+              let entry = hotKeys[previousSourceHotKey] as? [String: Any] else {
+            return defaultShortcut // never customized
+        }
+        guard (entry["enabled"] as? Bool) == true,
+              let value = entry["value"] as? [String: Any],
+              let parameters = value["parameters"] as? [Int], parameters.count == 3,
+              parameters[1] != 0xFFFF else {
+            return nil
+        }
+        return (CGKeyCode(parameters[1]), CGEventFlags(rawValue: UInt64(parameters[2])))
+    }
+
+    /// Used when the shortcut is turned off: selects the next enabled keyboard input source.
+    private static func selectNextSource() {
+        let filter = [kTISPropertyInputSourceCategory: kTISCategoryKeyboardInputSource as CFString,
+                      kTISPropertyInputSourceIsSelectCapable: true] as CFDictionary
+        guard let sources = TISCreateInputSourceList(filter, false)?.takeRetainedValue() as? [TISInputSource],
+              sources.count > 1 else { return }
+        let currentID = identifier(of: TISCopyCurrentKeyboardInputSource().takeRetainedValue())
+        let index = sources.firstIndex { identifier(of: $0) == currentID } ?? -1
+        TISSelectInputSource(sources[(index + 1) % sources.count])
+    }
+
+    /// A short name for the key cap: 中 for Chinese, あ for Japanese, 한 for Korean, otherwise the language code (EN, DE …).
+    static func currentShortName() -> String {
+        let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        guard let languages = property(of: source, kTISPropertyInputSourceLanguages) as? [String],
+              let language = languages.first else { return "" }
+        if language.hasPrefix("zh") { return "中" }
+        if language.hasPrefix("ja") { return "あ" }
+        if language.hasPrefix("ko") { return "한" }
+        return String(language.prefix(2)).uppercased()
+    }
+
+    private static func identifier(of source: TISInputSource) -> String? {
+        property(of: source, kTISPropertyInputSourceID) as? String
+    }
+
+    private static func property(of source: TISInputSource, _ key: CFString) -> AnyObject? {
+        guard let pointer = TISGetInputSourceProperty(source, key) else { return nil }
+        return Unmanaged<AnyObject>.fromOpaque(pointer).takeUnretainedValue()
     }
 }
 
