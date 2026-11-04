@@ -64,6 +64,7 @@ In October 2026 Apple announced the first Mac with a touchscreen: a MacBook Pro 
 | Tap | Click (tap twice to double-click) |
 | Drag with one finger | Scroll, with inertia when you flick |
 | Hold briefly, then move | Drag (select text, move windows and files) |
+| Drag a slider, scroll bar, splitter or title bar | Moves it right away, no hold needed |
 | Tap with two fingers | Secondary click, like on a Mac trackpad |
 | Pinch with two fingers | Zoom |
 | Swipe up with three fingers | Mission Control |
@@ -118,6 +119,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Setting | Default | What it does |
 |---|---|---|
 | Open at Login | Off | Start TouchMyMac when you log in (macOS 13 or later) |
+| Drag Controls Directly | On | Sliders, scroll bars, splitters and title bars follow your finger right away; elsewhere, dragging scrolls |
 | Hold Duration | 0.1 s | How long to hold still before moving turns into a drag instead of a scroll |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
 | Scroll Inertia | On | Keep scrolling after a flick |
