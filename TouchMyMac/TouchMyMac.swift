@@ -7,6 +7,7 @@
 
 import AppKit
 import Combine
+import IOKit.hid
 import ServiceManagement
 import TouchUpCore
 
@@ -89,6 +90,9 @@ class TouchMyMac: NSObject, ObservableObject {
     
     
     @Published var isAccessibilityAccessGranted = false
+    /// Input Monitoring lets the app read the touchscreen's HID reports; without it no touches arrive.
+    @Published private(set) var isInputMonitoringGranted = false
+    private var inputMonitoringTimer: Timer?
     @Published var touchUpdateCount: Int = 0
     @Published var lastTouchUpdateAt: Date?
     @Published var lastActiveTouchCount: Int = 0
@@ -275,6 +279,61 @@ class TouchMyMac: NSObject, ObservableObject {
     var accessibilityTrustedNow: Bool {
         AXIsProcessTrusted()
     }
+
+    // MARK: Input Monitoring
+
+    private static var inputMonitoringAccess: IOHIDAccessType {
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+    }
+
+    /// Re-reads the permission without asking. macOS posts no notification for it, so this also polls while it is missing.
+    func refreshInputMonitoringStatus() {
+        let granted = Self.inputMonitoringAccess == kIOHIDAccessTypeGranted
+        if granted != isInputMonitoringGranted {
+            isInputMonitoringGranted = granted
+            addDiagnosticsEvent(granted ? "Input Monitoring access granted" : "Input Monitoring access missing")
+            if granted {
+                // The HID manager opened without access reads nothing, so open it again now.
+                restartInputPipeline()
+            }
+        }
+        updateInputMonitoringPolling()
+    }
+
+    private func updateInputMonitoringPolling() {
+        if isInputMonitoringGranted {
+            inputMonitoringTimer?.invalidate()
+            inputMonitoringTimer = nil
+        } else if inputMonitoringTimer == nil {
+            inputMonitoringTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                self?.refreshInputMonitoringStatus()
+            }
+        }
+    }
+
+    /// Shows the system prompt if the app was never asked; otherwise opens the Input Monitoring list in System Settings.
+    func grantInputMonitoringAccess() {
+        if Self.inputMonitoringAccess == kIOHIDAccessTypeUnknown {
+            addDiagnosticsEvent("Requested Input Monitoring access prompt")
+            _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        } else {
+            openInputMonitoringSettings()
+        }
+        refreshInputMonitoringStatus()
+    }
+
+    /// Asks once, on the first launch that finds the permission undecided.
+    func requestInputMonitoringIfUndecided() {
+        if Self.inputMonitoringAccess == kIOHIDAccessTypeUnknown {
+            grantInputMonitoringAccess()
+        }
+    }
+
+    func openInputMonitoringSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
     
     func grantAccessibilityAccess() {
         self.touchManager.triggerSystemAccessibilityAccessAlert()
@@ -303,6 +362,8 @@ class TouchMyMac: NSObject, ObservableObject {
         initPreferences()
         
         checkAccessibilityAccessGranted()
+        isInputMonitoringGranted = Self.inputMonitoringAccess == kIOHIDAccessTypeGranted
+        updateInputMonitoringPolling()
         addDiagnosticsEvent("Initialized model")
     }
     
@@ -315,6 +376,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @objc func accessibilityPermissionsDidChange() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.refreshAccessibilityStatus()
+            self.refreshInputMonitoringStatus()
         }
     }
 
@@ -454,6 +516,9 @@ class TouchMyMac: NSObject, ObservableObject {
     func suggestedBlocker() -> String {
         if !accessibilityTrustedNow {
             return "Accessibility permission is not active."
+        }
+        if !isInputMonitoringGranted {
+            return "Input Monitoring permission is missing, so no touch reports can be read."
         }
         if !isPublishingMouseEventsEnabled {
             return "Mouse event publishing is OFF."

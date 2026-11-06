@@ -31,12 +31,15 @@
                                 thisFrame.size.height);
         
         
+        NSString *name = nil;
         if (@available(macOS 10.15, *)) {
-            self.name = [screen localizedName];
-        } else {
-            // Fallback on earlier versions
-            self.name =  [NSString stringWithFormat: @"Display %u", displayID];
+            name = [screen localizedName];
         }
+        // Some generic panels report no name at all; show something the user can pick.
+        if (name.length == 0) {
+            name = [NSString stringWithFormat:@"Display %u", displayID];
+        }
+        self.name = name;
         
     }
     

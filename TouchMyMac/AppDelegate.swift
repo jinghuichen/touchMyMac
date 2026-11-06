@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // Status rows at the top of the menu bar menu; the icon itself never changes.
     let statusSummaryMenuItem = NSMenuItem()
     let accessibilityStatusMenuItem = NSMenuItem()
+    let inputMonitoringStatusMenuItem = NSMenuItem()
     let touchscreenStatusMenuItem = NSMenuItem()
     
     
@@ -69,6 +70,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshStatusMenu() }
         )
+        self.observers.append(
+            self.model.$isInputMonitoringGranted
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] _ in self?.refreshStatusMenu() }
+        )
         
         self.observers.append(
             self.model.$isPublishingMouseEventsEnabled
@@ -79,9 +85,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         
         self.model.touchManager.start()
+        self.model.requestInputMonitoringIfUndecided()
         
-        
-        if !model.isAccessibilityAccessGranted {
+        if !model.isAccessibilityAccessGranted || !model.isInputMonitoringGranted {
             self.showPreferences(nil)
         }
         
@@ -206,9 +212,12 @@ extension AppDelegate: NSMenuDelegate {
 
         accessibilityStatusMenuItem.target = self
         accessibilityStatusMenuItem.action = #selector(openAccessibilitySettings(_:))
+        inputMonitoringStatusMenuItem.target = self
+        inputMonitoringStatusMenuItem.action = #selector(grantInputMonitoring(_:))
         touchscreenStatusMenuItem.submenu = NSMenu()
 
-        let items = [statusSummaryMenuItem, accessibilityStatusMenuItem, touchscreenStatusMenuItem, .separator()]
+        let items = [statusSummaryMenuItem, accessibilityStatusMenuItem, inputMonitoringStatusMenuItem,
+                     touchscreenStatusMenuItem, .separator()]
         for (index, item) in items.enumerated() {
             statusMenu.insertItem(item, at: index)
         }
@@ -218,11 +227,13 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu == statusMenu else { return }
         model.refreshAccessibilityStatus()
+        model.refreshInputMonitoringStatus()
         refreshStatusMenu()
     }
 
     func refreshStatusMenu() {
         let accessibilityGranted = model.isAccessibilityAccessGranted
+        let inputMonitoringGranted = model.isInputMonitoringGranted
         let deviceName = model.touchscreenDeviceName
         let touchControlOn = model.isPublishingMouseEventsEnabled
 
@@ -230,6 +241,8 @@ extension AppDelegate: NSMenuDelegate {
         let summary: (String, StatusTone)
         if !accessibilityGranted {
             summary = ("Needs Accessibility permission", .warning)
+        } else if !inputMonitoringGranted {
+            summary = ("Needs Input Monitoring permission", .warning)
         } else if deviceName == nil {
             summary = ("Waiting for a touchscreen", .problem)
         } else if !touchControlOn {
@@ -255,16 +268,37 @@ extension AppDelegate: NSMenuDelegate {
                 + "After an update, remove it from the list and add it again."
         }
 
+        if inputMonitoringGranted {
+            inputMonitoringStatusMenuItem.title = "Input Monitoring: Allowed"
+            inputMonitoringStatusMenuItem.image = Self.statusIcon(.good)
+            inputMonitoringStatusMenuItem.toolTip = "TouchMyMac may read the touchscreen's touch data."
+        } else {
+            inputMonitoringStatusMenuItem.title = "Input Monitoring: Not Allowed – Open Settings…"
+            inputMonitoringStatusMenuItem.image = Self.statusIcon(.warning)
+            inputMonitoringStatusMenuItem.toolTip = "Turn on TouchMyMac in Privacy & Security → Input Monitoring. "
+                + "Without it, macOS hides the touchscreen's touches from the app."
+        }
+
         // The touchscreen row names the monitor touches land on; its submenu picks another one.
         let display = model.connectedTouchscreen
-        if deviceName == nil {
+        if deviceName == nil && !inputMonitoringGranted {
+            // Without Input Monitoring the touchscreen may not show up at all, so don't call it unplugged.
+            touchscreenStatusMenuItem.title = "Touchscreen: Waiting for Input Monitoring"
+            touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
+            touchscreenStatusMenuItem.toolTip = "Allow Input Monitoring first; the touchscreen shows up after that."
+        } else if deviceName == nil {
             touchscreenStatusMenuItem.title = "Touchscreen: Not Connected"
             touchscreenStatusMenuItem.image = Self.statusIcon(.problem)
             touchscreenStatusMenuItem.toolTip = "Connect the touchscreen's USB cable."
         } else if let display {
             touchscreenStatusMenuItem.title = "Touchscreen: \(display.name)"
-            touchscreenStatusMenuItem.image = Self.statusIcon(.good)
-            touchscreenStatusMenuItem.toolTip = "Touches land on this display. Pick another one if it's the wrong monitor."
+            if inputMonitoringGranted {
+                touchscreenStatusMenuItem.image = Self.statusIcon(.good)
+                touchscreenStatusMenuItem.toolTip = "Touches land on this display. Pick another one if it's the wrong monitor."
+            } else {
+                touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
+                touchscreenStatusMenuItem.toolTip = "Connected, but no touches can be read until Input Monitoring is allowed."
+            }
         } else {
             touchscreenStatusMenuItem.title = "Touchscreen: No Display Found"
             touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
@@ -314,6 +348,10 @@ extension AppDelegate: NSMenuDelegate {
 
     @objc func openAccessibilitySettings(_ sender: Any?) {
         model.openAccessibilitySettings()
+    }
+
+    @objc func grantInputMonitoring(_ sender: Any?) {
+        model.grantInputMonitoringAccess()
     }
 }
 

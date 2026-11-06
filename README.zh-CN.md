@@ -50,7 +50,7 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 | ⌨️ **浮动键盘** | 完整的 Mac 键盘布局，一按就出字，打字再快、手指再重叠也不会漏字；能切换输入法，还能缩成 mini 键盘。 |
 | 🔌 **兼容更多屏幕** | 自动把为 Windows 设计的触摸屏从单点鼠标模式切到多点触摸，并支持开机自启，开机就能用。 |
 | 🩺 **状态与诊断** | 菜单栏菜单里能看到辅助功能权限是否已开启、触摸落在哪块显示器上；设置里还有触摸计数和手势识别结果，方便调校噪声较大的屏幕。 |
-| 🔒 **纯用户态** | 不需要内核扩展或额外安装驱动：一个 App，一项辅助功能权限。 |
+| 🔒 **纯用户态** | 不需要内核扩展或额外安装驱动：一个 App，两项隐私权限。 |
 
 ## 🖐 手势
 
@@ -103,11 +103,11 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 
 1. 从 [**Releases**](https://github.com/jinghuichen/touchMyMac/releases/latest) 下载 `TouchMyMac-x.y.z-macOS-unsigned.zip`，解压后把 `TouchMyMac.app` 拖到 `/Applications`。
 2. 打开 App。它没有经过公证，第一次打开会被 macOS 拦下：到 **系统设置 → 隐私与安全性**，点 **仍要打开**。
-3. 按提示授予 **辅助功能** 权限（系统设置 → 隐私与安全性 → 辅助功能）。TouchMyMac 需要它来发送点击、滚动和按键。
+3. 按提示授予 **辅助功能** 和 **输入监控** 权限（系统设置 → 隐私与安全性）。TouchMyMac 需要辅助功能来发送点击、滚动和按键，需要输入监控来读取屏幕的触摸数据。菜单栏菜单里能看到这两项；显示 Not Allowed 的那项点一下就能打开对应的设置页。
 4. 连接触摸屏。TouchMyMac 会把触摸对应到外接显示器，不会选 Mac 自带的屏幕。如果接了多块外接显示器，看一下菜单栏菜单里的 **Touchscreen** 一项，在那里选中触摸屏。
 
 > [!IMPORTANT]
-> 发布的版本是 ad-hoc 签名，macOS 会把每次更新都当成一个新 App。更新之后，请**在辅助功能列表里删掉 TouchMyMac 再重新加回来**，否则即使开关显示为打开，触摸也不会有反应。
+> 发布的版本是 ad-hoc 签名，macOS 会把每次更新都当成一个新 App。更新之后，请**在辅助功能和输入监控列表里删掉 TouchMyMac 再重新加回来**，否则即使开关显示为打开，触摸也不会有反应。
 
 > [!NOTE]
 > 发布的 zip 是为 Apple 芯片构建的。Intel Mac 可以[从源码构建](#-从源码构建)，但没有测试过。
@@ -152,7 +152,7 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 <details>
 <summary><b>安装或更新之后，触摸没有任何反应</b></summary>
 
-辅助功能权限缺失或已经失效，这时菜单栏菜单会显示 **Accessibility: Not Allowed**，点它就能打开对应的设置页。在 系统设置 → 隐私与安全性 → 辅助功能 里删掉 TouchMyMac，重新添加 `/Applications/TouchMyMac.app`，然后退出并重新打开 App。
+辅助功能或输入监控权限缺失或已经失效，这时菜单栏菜单里对应的一项会显示 **Not Allowed**，点它就能打开对应的设置页。在 系统设置 → 隐私与安全性 里对应的列表中删掉 TouchMyMac，重新添加 `/Applications/TouchMyMac.app`，然后退出并重新打开 App。
 </details>
 
 <details>
@@ -183,6 +183,12 @@ TouchMyMac 通过 macOS 的辅助功能来判断手指下面是什么。有些 A
 <summary><b>触摸落到了别的显示器上</b></summary>
 
 打开菜单栏菜单，在 **Touchscreen** 的子菜单里选中触摸屏（也可以在 Settings → General → Assign Mouse Events to 里选），TouchMyMac 会记住这个选择。选 **Automatic** 可以让它重新自动选择：它会跳过 Mac 自带的屏幕，但接了多块外接显示器时只能靠猜。
+</details>
+
+<details>
+<summary><b>点哪儿都不准，多指手势也没反应</b></summary>
+
+这说明 TouchMyMac 没有收到触摸数据，macOS 只是把屏幕当成普通鼠标，映射到它自己选的那块显示器上。看一下菜单栏菜单里是不是 **Input Monitoring: Allowed**。没有这项权限，macOS 不会把触摸数据交给 App，Settings → Diagnostics 里的 Touch Reports 会一直是 0。
 </details>
 
 <details>
