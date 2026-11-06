@@ -45,7 +45,7 @@ In October 2026 Apple announced the first Mac with a touchscreen: a MacBook Pro 
 | | |
 |---|---|
 | 👆 **Direct touch** | Tap to click, drag to scroll, hold and move to drag, two-finger tap for a secondary click. Sliders, scroll bars and title bars follow your finger right away. |
-| 🌀 **Trackpad-like scrolling** | Scrolling follows the display's refresh rate, filters out touch jitter and hands over to inertia without a pause. |
+| 🌀 **Trackpad-like scrolling** | Scrolling follows the display's refresh rate, filters out touch jitter and hands over to inertia without a pause. The pointer hides while you scroll. |
 | 🖐 **Multi-finger gestures** | Mission Control, switching desktops, showing or hiding the keyboard, and configurable shortcuts on four- and five-finger gestures. |
 | ⌨️ **Floating keyboard** | A full Mac layout whose keys fire as you touch them, so fast, overlapping typing doesn't drop letters. Switches input sources and shrinks to a mini keyboard. |
 | 🔌 **Works with more screens** | Switches touchscreens made for Windows out of single-touch mouse mode, and opens at login so the screen works right away. |
