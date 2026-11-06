@@ -939,6 +939,10 @@ static void CancelSetupRetry(void) {
     gSetupRetryCount = 0;
 }
 
+Boolean HIDManagerOpenFailed(void) {
+    return gManagerOpenFailed;
+}
+
 void CloseHIDManager(void) {
     CancelSetupRetry();
     TearDownHIDManager();

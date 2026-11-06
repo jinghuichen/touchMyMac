@@ -72,6 +72,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         self.observers.append(
             self.model.$isInputMonitoringGranted
+                .combineLatest(self.model.$isInputMonitoringNeeded)
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] _ in self?.refreshStatusMenu() }
         )
@@ -85,9 +86,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         
         self.model.touchManager.start()
-        self.model.requestInputMonitoringIfUndecided()
+        self.model.requestInputMonitoringIfNeeded()
         
-        if !model.isAccessibilityAccessGranted || !model.isInputMonitoringGranted {
+        if !model.isAccessibilityAccessGranted || model.isInputMonitoringNeeded {
             self.showPreferences(nil)
         }
         
@@ -234,6 +235,7 @@ extension AppDelegate: NSMenuDelegate {
     func refreshStatusMenu() {
         let accessibilityGranted = model.isAccessibilityAccessGranted
         let inputMonitoringGranted = model.isInputMonitoringGranted
+        let inputMonitoringNeeded = model.isInputMonitoringNeeded
         let deviceName = model.touchscreenDeviceName
         let touchControlOn = model.isPublishingMouseEventsEnabled
 
@@ -241,7 +243,7 @@ extension AppDelegate: NSMenuDelegate {
         let summary: (String, StatusTone)
         if !accessibilityGranted {
             summary = ("Needs Accessibility permission", .warning)
-        } else if !inputMonitoringGranted {
+        } else if inputMonitoringNeeded {
             summary = ("Needs Input Monitoring permission", .warning)
         } else if deviceName == nil {
             summary = ("Waiting for a touchscreen", .problem)
@@ -268,6 +270,8 @@ extension AppDelegate: NSMenuDelegate {
                 + "After an update, remove it from the list and add it again."
         }
 
+        // Most touchscreens don't need Input Monitoring, so the row only shows once it matters.
+        inputMonitoringStatusMenuItem.isHidden = !inputMonitoringGranted && !inputMonitoringNeeded
         if inputMonitoringGranted {
             inputMonitoringStatusMenuItem.title = "Input Monitoring: Allowed"
             inputMonitoringStatusMenuItem.image = Self.statusIcon(.good)
@@ -276,12 +280,12 @@ extension AppDelegate: NSMenuDelegate {
             inputMonitoringStatusMenuItem.title = "Input Monitoring: Not Allowed – Open Settings…"
             inputMonitoringStatusMenuItem.image = Self.statusIcon(.warning)
             inputMonitoringStatusMenuItem.toolTip = "Turn on TouchMyMac in Privacy & Security → Input Monitoring. "
-                + "Without it, macOS hides the touchscreen's touches from the app."
+                + "macOS won't let the app read this touchscreen without it."
         }
 
         // The touchscreen row names the monitor touches land on; its submenu picks another one.
         let display = model.connectedTouchscreen
-        if deviceName == nil && !inputMonitoringGranted {
+        if deviceName == nil && inputMonitoringNeeded {
             // Without Input Monitoring the touchscreen may not show up at all, so don't call it unplugged.
             touchscreenStatusMenuItem.title = "Touchscreen: Waiting for Input Monitoring"
             touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
@@ -292,7 +296,7 @@ extension AppDelegate: NSMenuDelegate {
             touchscreenStatusMenuItem.toolTip = "Connect the touchscreen's USB cable."
         } else if let display {
             touchscreenStatusMenuItem.title = "Touchscreen: \(display.name)"
-            if inputMonitoringGranted {
+            if !inputMonitoringNeeded {
                 touchscreenStatusMenuItem.image = Self.statusIcon(.good)
                 touchscreenStatusMenuItem.toolTip = "Touches land on this display. Pick another one if it's the wrong monitor."
             } else {

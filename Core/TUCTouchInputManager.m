@@ -144,6 +144,10 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     return name == NULL ? nil : (NSString *)CFBridgingRelease(name);
 }
 
+- (BOOL)hidManagerOpenFailed {
+    return HIDManagerOpenFailed();
+}
+
 - (void)didConnectTouchscreen {
     [self.delegate touchscreenDidConnect];
 }

@@ -90,8 +90,12 @@ class TouchMyMac: NSObject, ObservableObject {
     
     
     @Published var isAccessibilityAccessGranted = false
-    /// Input Monitoring lets the app read the touchscreen's HID reports; without it no touches arrive.
+    /// Input Monitoring lets the app read HID reports from touchscreens macOS treats as private input
+    /// (likely those that also report keys).
     @Published private(set) var isInputMonitoringGranted = false
+    /// True when reading the touchscreen failed and Input Monitoring is missing, so it is the likely cause.
+    /// Most touchscreens work without the permission, so nobody else is asked for it.
+    @Published private(set) var isInputMonitoringNeeded = false
     private var inputMonitoringTimer: Timer?
     @Published var touchUpdateCount: Int = 0
     @Published var lastTouchUpdateAt: Date?
@@ -195,6 +199,14 @@ class TouchMyMac: NSObject, ObservableObject {
             return true
         }
 
+        // Display IDs can change when a monitor reconnects; a single display with the remembered name is still it.
+        let sameName = connectedScreens.filter { $0.name == cues.name }
+        if sameName.count == 1, let screen = sameName.first {
+            self.connectedTouchscreen = screen
+            UserDefaults.standard.set(screen.id, forKey: "touchscreenIDCue")
+            return true
+        }
+
         return false
     }
 
@@ -205,7 +217,7 @@ class TouchMyMac: NSObject, ObservableObject {
             if Date().timeIntervalSince(lastDateUSBAdded) < hotPlugTimeInterval
                 && Date().timeIntervalSince(lastDateScreenAdded) < hotPlugTimeInterval {
 
-                if let screen = self.connectedScreens.first(where: {$0.id == idOfLastAddedScreen}) {
+                if let screen = self.connectedScreens.first(where: {$0.id == idOfLastAddedScreen}), !screen.isBuiltin {
                     self.connectedTouchscreen = screen
                     return true
                 }
@@ -237,8 +249,9 @@ class TouchMyMac: NSObject, ObservableObject {
         let oldScreenList = self.connectedScreens
         self.connectedScreens = TUCScreen.allScreens() as! [TUCScreen]
 
-        // a new screen appeared!
-        if connectedScreens.count > oldScreenList.count {
+        // A new screen appeared. The first listing at launch finds every screen at once, so it doesn't count:
+        // otherwise the touchscreen connecting at launch would be paired with whichever display came first.
+        if !oldScreenList.isEmpty && connectedScreens.count > oldScreenList.count {
             let new = connectedScreens.first { s in
                 !(oldScreenList.contains(where: {$0.id == s.id}))
             }
@@ -286,22 +299,30 @@ class TouchMyMac: NSObject, ObservableObject {
         IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
     }
 
-    /// Re-reads the permission without asking. macOS posts no notification for it, so this also polls while it is missing.
+    /// Re-reads the permission without asking. macOS posts no notification for it, so this also polls while it is needed.
     func refreshInputMonitoringStatus() {
         let granted = Self.inputMonitoringAccess == kIOHIDAccessTypeGranted
+        let wasNeeded = isInputMonitoringNeeded
         if granted != isInputMonitoringGranted {
             isInputMonitoringGranted = granted
             addDiagnosticsEvent(granted ? "Input Monitoring access granted" : "Input Monitoring access missing")
-            if granted {
-                // The HID manager opened without access reads nothing, so open it again now.
-                restartInputPipeline()
+        }
+        let needed = !granted && touchManager.hidManagerOpenFailed
+        if needed != isInputMonitoringNeeded {
+            isInputMonitoringNeeded = needed
+            if needed {
+                addDiagnosticsEvent("Touchscreen can't be read: Input Monitoring is needed")
             }
+        }
+        if granted && wasNeeded {
+            // The HID manager opened without access reads nothing, so open it again now.
+            restartInputPipeline()
         }
         updateInputMonitoringPolling()
     }
 
     private func updateInputMonitoringPolling() {
-        if isInputMonitoringGranted {
+        if !isInputMonitoringNeeded {
             inputMonitoringTimer?.invalidate()
             inputMonitoringTimer = nil
         } else if inputMonitoringTimer == nil {
@@ -322,9 +343,15 @@ class TouchMyMac: NSObject, ObservableObject {
         refreshInputMonitoringStatus()
     }
 
-    /// Asks once, on the first launch that finds the permission undecided.
-    func requestInputMonitoringIfUndecided() {
-        if Self.inputMonitoringAccess == kIOHIDAccessTypeUnknown {
+    var inputMonitoringStatusText: String {
+        if isInputMonitoringGranted { return "Granted" }
+        return isInputMonitoringNeeded ? "Missing" : "Not needed"
+    }
+
+    /// Call after starting the HID manager: asks for the permission only if reading the touchscreen failed without it.
+    func requestInputMonitoringIfNeeded() {
+        refreshInputMonitoringStatus()
+        if isInputMonitoringNeeded && Self.inputMonitoringAccess == kIOHIDAccessTypeUnknown {
             grantInputMonitoringAccess()
         }
     }
@@ -363,7 +390,6 @@ class TouchMyMac: NSObject, ObservableObject {
         
         checkAccessibilityAccessGranted()
         isInputMonitoringGranted = Self.inputMonitoringAccess == kIOHIDAccessTypeGranted
-        updateInputMonitoringPolling()
         addDiagnosticsEvent("Initialized model")
     }
     
@@ -517,8 +543,8 @@ class TouchMyMac: NSObject, ObservableObject {
         if !accessibilityTrustedNow {
             return "Accessibility permission is not active."
         }
-        if !isInputMonitoringGranted {
-            return "Input Monitoring permission is missing, so no touch reports can be read."
+        if isInputMonitoringNeeded {
+            return "The touchscreen can't be read: allow Input Monitoring."
         }
         if !isPublishingMouseEventsEnabled {
             return "Mouse event publishing is OFF."

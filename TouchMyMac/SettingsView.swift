@@ -216,7 +216,7 @@ struct SettingsView: View {
             if !model.isAccessibilityAccessGranted {
                 accessBanner
             }
-            if !model.isInputMonitoringGranted {
+            if model.isInputMonitoringNeeded {
                 inputMonitoringBanner
             }
 
@@ -265,7 +265,7 @@ struct SettingsView: View {
             SettingsGroup(title: "Status") {
                 settingValueRow("Accessibility", value: model.isAccessibilityAccessGranted ? "Granted" : "Missing")
                 sectionDivider
-                settingValueRow("Input Monitoring", value: model.isInputMonitoringGranted ? "Granted" : "Missing")
+                settingValueRow("Input Monitoring", value: model.inputMonitoringStatusText)
                 sectionDivider
                 settingValueRow("Input Publishing", value: model.isPublishingMouseEventsEnabled ? "Enabled" : "Disabled")
                 sectionDivider
@@ -412,7 +412,7 @@ struct SettingsView: View {
                 diagnosticsTextLine("Status", model.suggestedBlocker())
                 diagnosticsTextLine("Accessibility (Cached)", model.isAccessibilityAccessGranted ? "Granted" : "Missing")
                 diagnosticsTextLine("Accessibility (Live)", model.accessibilityTrustedNow ? "Granted" : "Missing")
-                diagnosticsTextLine("Input Monitoring", model.isInputMonitoringGranted ? "Granted" : "Missing")
+                diagnosticsTextLine("Input Monitoring", model.inputMonitoringStatusText)
                 diagnosticsTextLine("Input Enabled", model.isPublishingMouseEventsEnabled ? "Yes" : "No")
                 diagnosticsTextLine("Connection", "\(model.connectionState) · \(model.touchscreenDeviceName ?? "no device")")
                 diagnosticsTextLine("Connected Screens", "\(model.connectedScreens.count)")
@@ -457,7 +457,7 @@ struct SettingsView: View {
     private var inputMonitoringBanner: some View {
         permissionBanner(
             title: "Input Monitoring Access Required",
-            message: "TouchMyMac needs Input Monitoring to read touches from the touchscreen. "
+            message: "macOS won't let TouchMyMac read this touchscreen without Input Monitoring. "
                 + "Turn it on in System Settings → Privacy & Security → Input Monitoring.",
             action: model.grantInputMonitoringAccess
         )
