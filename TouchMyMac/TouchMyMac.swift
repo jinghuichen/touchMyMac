@@ -71,6 +71,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
 
     @Published var isScrollInertiaEnabled = true
+    @Published var isCursorHiddenWhileScrolling = true
     @Published var scrollSpeedMultiplier: CGFloat = 1.0
     @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.92
     @Published var scrollInertiaVelocityMultiplier: CGFloat = 1.0
@@ -602,6 +603,7 @@ extension TouchMyMac {
             "fiveFingerHoldShortcutSpec" : "fn",
             "fourFingerSwipeLeftSequenceSpec" : "cmd+a, delete",
             "isScrollInertiaEnabled" : true,
+            "isCursorHiddenWhileScrolling" : true,
             "scrollSpeedMultiplier" : 1.0,
             "scrollInertiaDecelerationPerFrame" : 0.92,
             "scrollInertiaVelocityMultiplier" : 1.0
@@ -628,6 +630,7 @@ extension TouchMyMac {
             $fiveFingerHoldShortcutSpec.assign(to: \.fiveFingerHoldShortcutSpec, on: touchManager),
             $fourFingerSwipeLeftSequenceSpec.assign(to: \.fourFingerSwipeLeftSequenceSpec, on: touchManager),
             $isScrollInertiaEnabled.assign(to: \.scrollInertiaEnabled, on: touchManager),
+            $isCursorHiddenWhileScrolling.assign(to: \.hidesCursorWhileScrolling, on: touchManager),
             $scrollSpeedMultiplier.assign(to: \.scrollSpeedMultiplier, on: touchManager),
             $scrollInertiaDecelerationPerFrame.assign(to: \.scrollInertiaDecelerationPerFrame, on: touchManager),
             $scrollInertiaVelocityMultiplier.assign(to: \.scrollInertiaVelocityMultiplier, on: touchManager)
@@ -656,6 +659,8 @@ extension TouchMyMac {
         touchManager.fourFingerSwipeLeftSequenceSpec = fourFingerSwipeLeftSequenceSpec
 
         isScrollInertiaEnabled = defaults.bool(forKey: "isScrollInertiaEnabled")
+        isCursorHiddenWhileScrolling = defaults.bool(forKey: "isCursorHiddenWhileScrolling")
+        touchManager.hidesCursorWhileScrolling = isCursorHiddenWhileScrolling
         scrollSpeedMultiplier = CGFloat(defaults.double(forKey: "scrollSpeedMultiplier"))
         scrollInertiaDecelerationPerFrame = CGFloat(defaults.double(forKey: "scrollInertiaDecelerationPerFrame"))
         scrollInertiaVelocityMultiplier = CGFloat(defaults.double(forKey: "scrollInertiaVelocityMultiplier"))
@@ -684,6 +689,7 @@ extension TouchMyMac {
         defaults.set(fourFingerSwipeLeftSequenceSpec, forKey: "fourFingerSwipeLeftSequenceSpec")
 
         defaults.set(isScrollInertiaEnabled, forKey: "isScrollInertiaEnabled")
+        defaults.set(isCursorHiddenWhileScrolling, forKey: "isCursorHiddenWhileScrolling")
         defaults.set(Double(scrollSpeedMultiplier), forKey: "scrollSpeedMultiplier")
         defaults.set(Double(scrollInertiaDecelerationPerFrame), forKey: "scrollInertiaDecelerationPerFrame")
         defaults.set(Double(scrollInertiaVelocityMultiplier), forKey: "scrollInertiaVelocityMultiplier")
@@ -942,6 +948,10 @@ extension TouchMyMac {
         case \.errorResistance:
             return("Error Resistance",
                    "If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs.")
+
+        case \.isCursorHiddenWhileScrolling:
+            return("Hide Pointer While Scrolling",
+                   "Scrolling leaves the pointer where it was, so it's hidden until the scroll and its inertia end.")
 
         case \.isScrollInertiaEnabled:
             return("Scroll Inertia",

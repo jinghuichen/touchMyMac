@@ -9,6 +9,7 @@
 #import <Carbon/Carbon.h>
 #import <QuartzCore/QuartzCore.h>
 #import <unistd.h>
+#import <dlfcn.h>
 
 #define kScrollSampleCapacity 32
 
@@ -21,6 +22,7 @@
 @property BOOL isLeftMouseDown;
 
 @property BOOL isScrollGestureActive;
+@property BOOL isCursorHiddenForScroll;
 @property CGPoint scrollRemainder; // sub-pixel part of the deltas, carried into the next event
 @property CGPoint fingerScrollPosition; // total finger travel in this scroll gesture
 // Adaptive smoothing of the finger path (see `filterFingerPosition:at:`).
@@ -365,7 +367,63 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     return CACurrentMediaTime();
 }
 
+/**
+ Only the active app may hide the pointer through public API, and TouchMyMac runs in the background.
+ The window server's "SetsCursorInBackground" connection property lifts that limit. It is private,
+ so it's looked up at runtime; if it's missing, hiding simply does nothing.
+ */
+static void TUCAllowCursorHidingInBackground(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        typedef int (*TUCDefaultConnectionFunction)(void);
+        typedef CGError (*TUCSetConnectionPropertyFunction)(int, int, CFStringRef, CFTypeRef);
+        TUCDefaultConnectionFunction defaultConnection = (TUCDefaultConnectionFunction)dlsym(RTLD_DEFAULT, "_CGSDefaultConnection");
+        TUCSetConnectionPropertyFunction setProperty = (TUCSetConnectionPropertyFunction)dlsym(RTLD_DEFAULT, "CGSSetConnectionProperty");
+        if (defaultConnection != NULL && setProperty != NULL) {
+            int connection = defaultConnection();
+            setProperty(connection, connection, CFSTR("SetsCursorInBackground"), kCFBooleanTrue);
+        }
+    });
+}
+
+- (void)setHidesCursorWhileScrolling:(BOOL)hidesCursorWhileScrolling {
+    _hidesCursorWhileScrolling = hidesCursorWhileScrolling;
+    if (!hidesCursorWhileScrolling) {
+        [self setCursorHiddenForScroll:NO];
+    }
+}
+
+/// Hide and show calls are counted by the system, so this keeps them paired.
+- (void)setCursorHiddenForScroll:(BOOL)hidden {
+    if (hidden == _isCursorHiddenForScroll) {
+        return;
+    }
+    if (hidden) {
+        if (!self.hidesCursorWhileScrolling) {
+            return;
+        }
+        TUCAllowCursorHidingInBackground();
+        if (CGDisplayHideCursor(kCGNullDirectDisplay) != kCGErrorSuccess) {
+            return;
+        }
+    } else {
+        CGDisplayShowCursor(kCGNullDirectDisplay);
+    }
+    _isCursorHiddenForScroll = hidden;
+}
+
 - (void)postScrollDelta:(CGPoint)delta scrollPhase:(CGScrollPhase)scrollPhase momentumPhase:(CGMomentumScrollPhase)momentumPhase {
+    if (scrollPhase == kCGScrollPhaseBegan) {
+        [self setCursorHiddenForScroll:YES];
+    } else if (scrollPhase == kCGScrollPhaseEnded || momentumPhase == kCGMomentumScrollPhaseEnd) {
+        // Inertia starts right after the finger's scroll ends; show the pointer once neither is running.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self.isScrollGestureActive && !self.isMomentumActive) {
+                [self setCursorHiddenForScroll:NO];
+            }
+        });
+    }
+
     // Scroll events carry whole pixels. Carry the remainder forward instead of truncating it,
     // otherwise slow drags and the tail of inertia lose distance and stutter.
     CGPoint total = CGPointMake(self.scrollRemainder.x + delta.x, self.scrollRemainder.y + delta.y);

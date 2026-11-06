@@ -122,6 +122,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Drag Controls Directly | On | Sliders, scroll bars, splitters and title bars follow your finger right away; elsewhere, dragging scrolls |
 | Hold Duration | 0.1 s | How long to hold still before moving turns into a drag instead of a scroll |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
+| Hide Pointer While Scrolling | On | Hide the pointer until a scroll and its inertia end |
 | Scroll Inertia | On | Keep scrolling after a flick |
 | Decay Speed | 0.92 | How quickly inertia slows down (higher glides longer) |
 | Inertia Amount | 1.0 | How far inertia glides |

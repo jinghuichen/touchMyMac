@@ -61,6 +61,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property BOOL scrollInertiaEnabled;
 
 /**
+ Hides the pointer while scrolling. Default value is YES.
+ */
+@property (nonatomic) BOOL hidesCursorWhileScrolling;
+
+/**
  Controls how quickly inertial scrolling slows down per 60Hz frame.
  Default matches the built-in tuning (0.95).
  */

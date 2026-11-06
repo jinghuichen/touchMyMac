@@ -339,6 +339,8 @@ struct SettingsView: View {
             }
 
             SettingsGroup(title: "Scroll") {
+                settingToggleRow(labels: model.uiLabels(for: \.isCursorHiddenWhileScrolling), isOn: $model.isCursorHiddenWhileScrolling)
+                sectionDivider
                 settingToggleRow(labels: model.uiLabels(for: \.isScrollInertiaEnabled), isOn: $model.isScrollInertiaEnabled)
                 sectionDivider
                 sliderRow(
