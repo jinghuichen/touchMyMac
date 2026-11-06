@@ -216,6 +216,9 @@ struct SettingsView: View {
             if !model.isAccessibilityAccessGranted {
                 accessBanner
             }
+            if model.isInputMonitoringNeeded {
+                inputMonitoringBanner
+            }
 
             SettingsGroup(title: "Input") {
                 settingToggleRow(
@@ -261,6 +264,8 @@ struct SettingsView: View {
 
             SettingsGroup(title: "Status") {
                 settingValueRow("Accessibility", value: model.isAccessibilityAccessGranted ? "Granted" : "Missing")
+                sectionDivider
+                settingValueRow("Input Monitoring", value: model.inputMonitoringStatusText)
                 sectionDivider
                 settingValueRow("Input Publishing", value: model.isPublishingMouseEventsEnabled ? "Enabled" : "Disabled")
                 sectionDivider
@@ -334,6 +339,8 @@ struct SettingsView: View {
             }
 
             SettingsGroup(title: "Scroll") {
+                settingToggleRow(labels: model.uiLabels(for: \.isCursorHiddenWhileScrolling), isOn: $model.isCursorHiddenWhileScrolling)
+                sectionDivider
                 settingToggleRow(labels: model.uiLabels(for: \.isScrollInertiaEnabled), isOn: $model.isScrollInertiaEnabled)
                 sectionDivider
                 sliderRow(
@@ -390,6 +397,8 @@ struct SettingsView: View {
             SettingsGroup(title: "Actions") {
                 actionRow(title: "Grant Accessibility Access", action: model.grantAccessibilityAccess)
                 sectionDivider
+                actionRow(title: "Grant Input Monitoring Access", action: model.grantInputMonitoringAccess)
+                sectionDivider
                 actionRow(title: "Restart Input Pipeline", action: model.restartInputPipeline)
                 sectionDivider
                 actionRow(title: "Refresh Touch Connection", action: model.refreshTouchConnection)
@@ -405,6 +414,7 @@ struct SettingsView: View {
                 diagnosticsTextLine("Status", model.suggestedBlocker())
                 diagnosticsTextLine("Accessibility (Cached)", model.isAccessibilityAccessGranted ? "Granted" : "Missing")
                 diagnosticsTextLine("Accessibility (Live)", model.accessibilityTrustedNow ? "Granted" : "Missing")
+                diagnosticsTextLine("Input Monitoring", model.inputMonitoringStatusText)
                 diagnosticsTextLine("Input Enabled", model.isPublishingMouseEventsEnabled ? "Yes" : "No")
                 diagnosticsTextLine("Connection", "\(model.connectionState) · \(model.touchscreenDeviceName ?? "no device")")
                 diagnosticsTextLine("Connected Screens", "\(model.connectedScreens.count)")
@@ -439,21 +449,36 @@ struct SettingsView: View {
     }
 
     private var accessBanner: some View {
+        permissionBanner(
+            title: "Accessibility Access Required",
+            message: "TouchMyMac needs Accessibility access before macOS will accept the injected mouse and keyboard events.",
+            action: model.grantAccessibilityAccess
+        )
+    }
+
+    private var inputMonitoringBanner: some View {
+        permissionBanner(
+            title: "Input Monitoring Access Required",
+            message: "macOS won't let TouchMyMac read this touchscreen without Input Monitoring. "
+                + "Turn it on in System Settings → Privacy & Security → Input Monitoring.",
+            action: model.grantInputMonitoringAccess
+        )
+    }
+
+    private func permissionBanner(title: String, message: String, action: @escaping () -> Void) -> some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Accessibility Access Required")
+                Text(title)
                     .font(.headline)
-                Text("TouchMyMac needs Accessibility access before macOS will accept the injected mouse and keyboard events.")
+                Text(message)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
 
             Spacer()
 
-            Button("Grant Access") {
-                model.grantAccessibilityAccess()
-            }
-            .buttonStyle(.borderedProminent)
+            Button("Grant Access", action: action)
+                .buttonStyle(.borderedProminent)
         }
         .padding(16)
         .background(

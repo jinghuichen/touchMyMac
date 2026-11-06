@@ -7,6 +7,7 @@
 
 import AppKit
 import Combine
+import IOKit.hid
 import ServiceManagement
 import TouchUpCore
 
@@ -70,6 +71,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
 
     @Published var isScrollInertiaEnabled = true
+    @Published var isCursorHiddenWhileScrolling = true
     @Published var scrollSpeedMultiplier: CGFloat = 1.0
     @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.92
     @Published var scrollInertiaVelocityMultiplier: CGFloat = 1.0
@@ -89,6 +91,13 @@ class TouchMyMac: NSObject, ObservableObject {
     
     
     @Published var isAccessibilityAccessGranted = false
+    /// Input Monitoring lets the app read HID reports from touchscreens macOS treats as private input
+    /// (likely those that also report keys).
+    @Published private(set) var isInputMonitoringGranted = false
+    /// True when reading the touchscreen failed and Input Monitoring is missing, so it is the likely cause.
+    /// Most touchscreens work without the permission, so nobody else is asked for it.
+    @Published private(set) var isInputMonitoringNeeded = false
+    private var inputMonitoringTimer: Timer?
     @Published var touchUpdateCount: Int = 0
     @Published var lastTouchUpdateAt: Date?
     @Published var lastActiveTouchCount: Int = 0
@@ -191,6 +200,14 @@ class TouchMyMac: NSObject, ObservableObject {
             return true
         }
 
+        // Display IDs can change when a monitor reconnects; a single display with the remembered name is still it.
+        let sameName = connectedScreens.filter { $0.name == cues.name }
+        if sameName.count == 1, let screen = sameName.first {
+            self.connectedTouchscreen = screen
+            UserDefaults.standard.set(screen.id, forKey: "touchscreenIDCue")
+            return true
+        }
+
         return false
     }
 
@@ -201,7 +218,7 @@ class TouchMyMac: NSObject, ObservableObject {
             if Date().timeIntervalSince(lastDateUSBAdded) < hotPlugTimeInterval
                 && Date().timeIntervalSince(lastDateScreenAdded) < hotPlugTimeInterval {
 
-                if let screen = self.connectedScreens.first(where: {$0.id == idOfLastAddedScreen}) {
+                if let screen = self.connectedScreens.first(where: {$0.id == idOfLastAddedScreen}), !screen.isBuiltin {
                     self.connectedTouchscreen = screen
                     return true
                 }
@@ -233,8 +250,9 @@ class TouchMyMac: NSObject, ObservableObject {
         let oldScreenList = self.connectedScreens
         self.connectedScreens = TUCScreen.allScreens() as! [TUCScreen]
 
-        // a new screen appeared!
-        if connectedScreens.count > oldScreenList.count {
+        // A new screen appeared. The first listing at launch finds every screen at once, so it doesn't count:
+        // otherwise the touchscreen connecting at launch would be paired with whichever display came first.
+        if !oldScreenList.isEmpty && connectedScreens.count > oldScreenList.count {
             let new = connectedScreens.first { s in
                 !(oldScreenList.contains(where: {$0.id == s.id}))
             }
@@ -275,6 +293,75 @@ class TouchMyMac: NSObject, ObservableObject {
     var accessibilityTrustedNow: Bool {
         AXIsProcessTrusted()
     }
+
+    // MARK: Input Monitoring
+
+    private static var inputMonitoringAccess: IOHIDAccessType {
+        IOHIDCheckAccess(kIOHIDRequestTypeListenEvent)
+    }
+
+    /// Re-reads the permission without asking. macOS posts no notification for it, so this also polls while it is needed.
+    func refreshInputMonitoringStatus() {
+        let granted = Self.inputMonitoringAccess == kIOHIDAccessTypeGranted
+        let wasNeeded = isInputMonitoringNeeded
+        if granted != isInputMonitoringGranted {
+            isInputMonitoringGranted = granted
+            addDiagnosticsEvent(granted ? "Input Monitoring access granted" : "Input Monitoring access missing")
+        }
+        let needed = !granted && touchManager.hidManagerOpenFailed
+        if needed != isInputMonitoringNeeded {
+            isInputMonitoringNeeded = needed
+            if needed {
+                addDiagnosticsEvent("Touchscreen can't be read: Input Monitoring is needed")
+            }
+        }
+        if granted && wasNeeded {
+            // The HID manager opened without access reads nothing, so open it again now.
+            restartInputPipeline()
+        }
+        updateInputMonitoringPolling()
+    }
+
+    private func updateInputMonitoringPolling() {
+        if !isInputMonitoringNeeded {
+            inputMonitoringTimer?.invalidate()
+            inputMonitoringTimer = nil
+        } else if inputMonitoringTimer == nil {
+            inputMonitoringTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                self?.refreshInputMonitoringStatus()
+            }
+        }
+    }
+
+    /// Shows the system prompt if the app was never asked; otherwise opens the Input Monitoring list in System Settings.
+    func grantInputMonitoringAccess() {
+        if Self.inputMonitoringAccess == kIOHIDAccessTypeUnknown {
+            addDiagnosticsEvent("Requested Input Monitoring access prompt")
+            _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+        } else {
+            openInputMonitoringSettings()
+        }
+        refreshInputMonitoringStatus()
+    }
+
+    var inputMonitoringStatusText: String {
+        if isInputMonitoringGranted { return "Granted" }
+        return isInputMonitoringNeeded ? "Missing" : "Not needed"
+    }
+
+    /// Call after starting the HID manager: asks for the permission only if reading the touchscreen failed without it.
+    func requestInputMonitoringIfNeeded() {
+        refreshInputMonitoringStatus()
+        if isInputMonitoringNeeded && Self.inputMonitoringAccess == kIOHIDAccessTypeUnknown {
+            grantInputMonitoringAccess()
+        }
+    }
+
+    func openInputMonitoringSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
     
     func grantAccessibilityAccess() {
         self.touchManager.triggerSystemAccessibilityAccessAlert()
@@ -303,6 +390,7 @@ class TouchMyMac: NSObject, ObservableObject {
         initPreferences()
         
         checkAccessibilityAccessGranted()
+        isInputMonitoringGranted = Self.inputMonitoringAccess == kIOHIDAccessTypeGranted
         addDiagnosticsEvent("Initialized model")
     }
     
@@ -315,6 +403,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @objc func accessibilityPermissionsDidChange() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.refreshAccessibilityStatus()
+            self.refreshInputMonitoringStatus()
         }
     }
 
@@ -455,6 +544,9 @@ class TouchMyMac: NSObject, ObservableObject {
         if !accessibilityTrustedNow {
             return "Accessibility permission is not active."
         }
+        if isInputMonitoringNeeded {
+            return "The touchscreen can't be read: allow Input Monitoring."
+        }
         if !isPublishingMouseEventsEnabled {
             return "Mouse event publishing is OFF."
         }
@@ -511,6 +603,7 @@ extension TouchMyMac {
             "fiveFingerHoldShortcutSpec" : "fn",
             "fourFingerSwipeLeftSequenceSpec" : "cmd+a, delete",
             "isScrollInertiaEnabled" : true,
+            "isCursorHiddenWhileScrolling" : true,
             "scrollSpeedMultiplier" : 1.0,
             "scrollInertiaDecelerationPerFrame" : 0.92,
             "scrollInertiaVelocityMultiplier" : 1.0
@@ -537,6 +630,7 @@ extension TouchMyMac {
             $fiveFingerHoldShortcutSpec.assign(to: \.fiveFingerHoldShortcutSpec, on: touchManager),
             $fourFingerSwipeLeftSequenceSpec.assign(to: \.fourFingerSwipeLeftSequenceSpec, on: touchManager),
             $isScrollInertiaEnabled.assign(to: \.scrollInertiaEnabled, on: touchManager),
+            $isCursorHiddenWhileScrolling.assign(to: \.hidesCursorWhileScrolling, on: touchManager),
             $scrollSpeedMultiplier.assign(to: \.scrollSpeedMultiplier, on: touchManager),
             $scrollInertiaDecelerationPerFrame.assign(to: \.scrollInertiaDecelerationPerFrame, on: touchManager),
             $scrollInertiaVelocityMultiplier.assign(to: \.scrollInertiaVelocityMultiplier, on: touchManager)
@@ -565,6 +659,8 @@ extension TouchMyMac {
         touchManager.fourFingerSwipeLeftSequenceSpec = fourFingerSwipeLeftSequenceSpec
 
         isScrollInertiaEnabled = defaults.bool(forKey: "isScrollInertiaEnabled")
+        isCursorHiddenWhileScrolling = defaults.bool(forKey: "isCursorHiddenWhileScrolling")
+        touchManager.hidesCursorWhileScrolling = isCursorHiddenWhileScrolling
         scrollSpeedMultiplier = CGFloat(defaults.double(forKey: "scrollSpeedMultiplier"))
         scrollInertiaDecelerationPerFrame = CGFloat(defaults.double(forKey: "scrollInertiaDecelerationPerFrame"))
         scrollInertiaVelocityMultiplier = CGFloat(defaults.double(forKey: "scrollInertiaVelocityMultiplier"))
@@ -593,6 +689,7 @@ extension TouchMyMac {
         defaults.set(fourFingerSwipeLeftSequenceSpec, forKey: "fourFingerSwipeLeftSequenceSpec")
 
         defaults.set(isScrollInertiaEnabled, forKey: "isScrollInertiaEnabled")
+        defaults.set(isCursorHiddenWhileScrolling, forKey: "isCursorHiddenWhileScrolling")
         defaults.set(Double(scrollSpeedMultiplier), forKey: "scrollSpeedMultiplier")
         defaults.set(Double(scrollInertiaDecelerationPerFrame), forKey: "scrollInertiaDecelerationPerFrame")
         defaults.set(Double(scrollInertiaVelocityMultiplier), forKey: "scrollInertiaVelocityMultiplier")
@@ -851,6 +948,10 @@ extension TouchMyMac {
         case \.errorResistance:
             return("Error Resistance",
                    "If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs.")
+
+        case \.isCursorHiddenWhileScrolling:
+            return("Hide Pointer While Scrolling",
+                   "Scrolling leaves the pointer where it was, so it's hidden until the scroll and its inertia end.")
 
         case \.isScrollInertiaEnabled:
             return("Scroll Inertia",

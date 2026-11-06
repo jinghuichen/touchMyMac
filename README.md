@@ -50,7 +50,7 @@ In October 2026 Apple announced the first Mac with a touchscreen: a MacBook Pro 
 | ⌨️ **Floating keyboard** | A full Mac layout whose keys fire as you touch them, so fast, overlapping typing doesn't drop letters. Switches input sources and shrinks to a mini keyboard. |
 | 🔌 **Works with more screens** | Switches touchscreens made for Windows out of single-touch mouse mode, and opens at login so the screen works right away. |
 | 🩺 **Status and diagnostics** | The menu bar menu shows whether Accessibility is allowed and which display your touches land on. Settings adds touch counters and a gesture stream to tune noisy panels. |
-| 🔒 **User space only** | No kernel extension or driver install: one app, one Accessibility permission. |
+| 🔒 **User space only** | No kernel extension or driver install: one app, one Accessibility permission (some screens also need Input Monitoring). |
 
 ## 🖐 Gestures
 
@@ -103,11 +103,11 @@ Synthesized scroll events are easy to get wrong, so TouchMyMac borrows from how 
 
 1. Download `TouchMyMac-x.y.z-macOS-unsigned.zip` from [**Releases**](https://github.com/jinghuichen/touchMyMac/releases/latest), unzip it and move `TouchMyMac.app` to `/Applications`.
 2. Open the app. It isn't notarized, so macOS blocks the first launch: open **System Settings → Privacy & Security** and click **Open Anyway**.
-3. Grant **Accessibility** access when asked (System Settings → Privacy & Security → Accessibility). TouchMyMac needs it to post clicks, scrolling and key presses.
+3. Grant **Accessibility** access when asked (System Settings → Privacy & Security → Accessibility). TouchMyMac needs it to post clicks, scrolling and key presses. Some touchscreens can only be read with **Input Monitoring** as well; TouchMyMac asks for it only when your screen needs it, and the menu bar menu then shows an Input Monitoring row.
 4. Connect your touchscreen. TouchMyMac maps touches to an external display, never the Mac's built-in one. With several external displays, check the **Touchscreen** row in the menu bar menu and pick the right monitor there.
 
 > [!IMPORTANT]
-> Release builds are ad-hoc signed, so macOS treats every update as a new app. After updating, **remove TouchMyMac from the Accessibility list and add it again**. Otherwise touches do nothing even though the switch looks on.
+> Release builds are ad-hoc signed, so macOS treats every update as a new app. After updating, **remove TouchMyMac from the Accessibility list (and Input Monitoring, if you use it) and add it again**. Otherwise touches do nothing even though the switch looks on.
 
 > [!NOTE]
 > The release zip is built for Apple silicon. Intel Macs can [build from source](#-build-from-source), but that is untested.
@@ -122,6 +122,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Drag Controls Directly | On | Sliders, scroll bars, splitters and title bars follow your finger right away; elsewhere, dragging scrolls |
 | Hold Duration | 0.1 s | How long to hold still before moving turns into a drag instead of a scroll |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
+| Hide Pointer While Scrolling | On | Hide the pointer until a scroll and its inertia end |
 | Scroll Inertia | On | Keep scrolling after a flick |
 | Decay Speed | 0.92 | How quickly inertia slows down (higher glides longer) |
 | Inertia Amount | 1.0 | How far inertia glides |
@@ -152,7 +153,7 @@ Have it working on another screen? Open an issue or PR to add it here.
 <details>
 <summary><b>Touches do nothing after installing or updating</b></summary>
 
-Accessibility access is missing or stale. The menu bar menu then shows **Accessibility: Not Allowed**; clicking it opens the right page. Remove TouchMyMac from System Settings → Privacy & Security → Accessibility, add `/Applications/TouchMyMac.app` again, then quit and reopen the app.
+Accessibility or Input Monitoring access is missing or stale. The menu bar menu then shows **Not Allowed** next to it; clicking it opens the right page. Remove TouchMyMac from that list in System Settings → Privacy & Security, add `/Applications/TouchMyMac.app` again, then quit and reopen the app.
 </details>
 
 <details>
@@ -183,6 +184,12 @@ TouchMyMac asks macOS Accessibility what is under your finger. Apps that draw th
 <summary><b>Touches land on the wrong display</b></summary>
 
 Open the menu bar menu, point to **Touchscreen** and pick the monitor (or use Settings → General → Assign Mouse Events to). TouchMyMac remembers the choice. Choose **Automatic** to let it pick again: it skips the Mac's built-in display, but with several external displays it can only guess.
+</details>
+
+<details>
+<summary><b>Taps land in the wrong place and multi-finger gestures do nothing</b></summary>
+
+TouchMyMac isn't receiving touches, so macOS treats the screen as a plain mouse that maps onto whichever display it picks. If the menu bar menu shows **Input Monitoring: Not Allowed**, allow it: some screens can't be read without that permission, and Settings → Diagnostics then shows Touch Reports staying at 0.
 </details>
 
 <details>

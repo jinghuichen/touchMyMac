@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// Product name of the touchscreen being read, or nil when none is connected.
 @property (nullable, readonly, copy) NSString *connectedTouchscreenName;
 
+/// YES while the HID manager could not be opened, so touch data can't be read (often missing Input Monitoring).
+@property (readonly) BOOL hidManagerOpenFailed;
+
 /**
  Allows to deactiate that the framework processes touches to post them as mouse events.
  The default value is YES.
@@ -56,6 +59,11 @@ NS_ASSUME_NONNULL_BEGIN
  Default value is YES.
  */
 @property BOOL scrollInertiaEnabled;
+
+/**
+ Hides the pointer while scrolling. Default value is YES.
+ */
+@property (nonatomic) BOOL hidesCursorWhileScrolling;
 
 /**
  Controls how quickly inertial scrolling slows down per 60Hz frame.

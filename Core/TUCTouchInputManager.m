@@ -144,6 +144,10 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     return name == NULL ? nil : (NSString *)CFBridgingRelease(name);
 }
 
+- (BOOL)hidManagerOpenFailed {
+    return HIDManagerOpenFailed();
+}
+
 - (void)didConnectTouchscreen {
     [self.delegate touchscreenDidConnect];
 }
@@ -1356,6 +1360,7 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
         self.ignoreOriginTouches = NO;
 
         self.scrollInertiaEnabled = YES;
+        self.hidesCursorWhileScrolling = YES;
         self.scrollInertiaDecelerationPerFrame = 0.92;
         self.scrollInertiaVelocityMultiplier = 1.0;
         self.scrollSpeedMultiplier = 1.0;
@@ -1372,6 +1377,11 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
 - (void)setScrollInertiaEnabled:(BOOL)scrollInertiaEnabled {
     _scrollInertiaEnabled = scrollInertiaEnabled;
     [TUCCursorUtilities sharedInstance].momentumScrollEnabled = scrollInertiaEnabled;
+}
+
+- (void)setHidesCursorWhileScrolling:(BOOL)hidesCursorWhileScrolling {
+    _hidesCursorWhileScrolling = hidesCursorWhileScrolling;
+    [TUCCursorUtilities sharedInstance].hidesCursorWhileScrolling = hidesCursorWhileScrolling;
 }
 
 - (void)setScrollInertiaDecelerationPerFrame:(CGFloat)scrollInertiaDecelerationPerFrame {
