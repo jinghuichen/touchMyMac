@@ -204,6 +204,12 @@ TouchMyMac 通过 macOS 的辅助功能来判断手指下面是什么。有些 A
 把 Error Resistance 调大，并保持 Ignore Origin Touches 打开。Diagnostics 页面会实时显示触摸数量和识别到的手势，方便定位问题。
 </details>
 
+<details>
+<summary><b>怎么在中文和英文界面之间切换？</b></summary>
+
+TouchMyMac 跟随系统语言：在 系统设置 → 通用 → 语言与地区 里简体中文排在最前面时显示中文，否则显示英文。如果只想让 TouchMyMac 用另一种语言，在同一页的 **App** 里单独给它设置（需要 macOS 13 或更高版本），然后重新打开 App。
+</details>
+
 ## 🛠 从源码构建
 
 ```bash

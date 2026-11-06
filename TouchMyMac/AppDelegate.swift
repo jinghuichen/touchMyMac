@@ -210,6 +210,10 @@ extension AppDelegate: NSMenuDelegate {
 
     func installStatusMenuItems() {
         statusMenu.delegate = self
+        // The menu's own items come from MainMenu.xib in English.
+        for item in statusMenu.items where !item.isSeparatorItem {
+            item.title = L(item.title)
+        }
 
         accessibilityStatusMenuItem.target = self
         accessibilityStatusMenuItem.action = #selector(openAccessibilitySettings(_:))
@@ -242,15 +246,15 @@ extension AppDelegate: NSMenuDelegate {
         // Summary: the one thing to look at first.
         let summary: (String, StatusTone)
         if !accessibilityGranted {
-            summary = ("Needs Accessibility permission", .warning)
+            summary = (L("Needs Accessibility permission"), .warning)
         } else if inputMonitoringNeeded {
-            summary = ("Needs Input Monitoring permission", .warning)
+            summary = (L("Needs Input Monitoring permission"), .warning)
         } else if deviceName == nil {
-            summary = ("Waiting for a touchscreen", .problem)
+            summary = (L("Waiting for a touchscreen"), .problem)
         } else if !touchControlOn {
-            summary = ("Touch control is paused", .neutral)
+            summary = (L("Touch control is paused"), .neutral)
         } else {
-            summary = ("Ready: touch control is on", .good)
+            summary = (L("Ready: touch control is on"), .good)
         }
         statusSummaryMenuItem.attributedTitle = NSAttributedString(string: summary.0, attributes: [
             .font: NSFont.menuFont(ofSize: 0).bold,
@@ -260,51 +264,49 @@ extension AppDelegate: NSMenuDelegate {
         statusSummaryMenuItem.isEnabled = false
 
         if accessibilityGranted {
-            accessibilityStatusMenuItem.title = "Accessibility: Allowed"
+            accessibilityStatusMenuItem.title = L("Accessibility: Allowed")
             accessibilityStatusMenuItem.image = Self.statusIcon(.good)
-            accessibilityStatusMenuItem.toolTip = "TouchMyMac may control the mouse and keyboard."
+            accessibilityStatusMenuItem.toolTip = L("TouchMyMac may control the mouse and keyboard.")
         } else {
-            accessibilityStatusMenuItem.title = "Accessibility: Not Allowed – Open Settings…"
+            accessibilityStatusMenuItem.title = L("Accessibility: Not Allowed – Open Settings…")
             accessibilityStatusMenuItem.image = Self.statusIcon(.warning)
-            accessibilityStatusMenuItem.toolTip = "Turn on TouchMyMac in Privacy & Security → Accessibility. "
-                + "After an update, remove it from the list and add it again."
+            accessibilityStatusMenuItem.toolTip = L("Turn on TouchMyMac in Privacy & Security → Accessibility. After an update, remove it from the list and add it again.")
         }
 
         // Most touchscreens don't need Input Monitoring, so the row only shows once it matters.
         inputMonitoringStatusMenuItem.isHidden = !inputMonitoringGranted && !inputMonitoringNeeded
         if inputMonitoringGranted {
-            inputMonitoringStatusMenuItem.title = "Input Monitoring: Allowed"
+            inputMonitoringStatusMenuItem.title = L("Input Monitoring: Allowed")
             inputMonitoringStatusMenuItem.image = Self.statusIcon(.good)
-            inputMonitoringStatusMenuItem.toolTip = "TouchMyMac may read the touchscreen's touch data."
+            inputMonitoringStatusMenuItem.toolTip = L("TouchMyMac may read the touchscreen's touch data.")
         } else {
-            inputMonitoringStatusMenuItem.title = "Input Monitoring: Not Allowed – Open Settings…"
+            inputMonitoringStatusMenuItem.title = L("Input Monitoring: Not Allowed – Open Settings…")
             inputMonitoringStatusMenuItem.image = Self.statusIcon(.warning)
-            inputMonitoringStatusMenuItem.toolTip = "Turn on TouchMyMac in Privacy & Security → Input Monitoring. "
-                + "macOS won't let the app read this touchscreen without it."
+            inputMonitoringStatusMenuItem.toolTip = L("Turn on TouchMyMac in Privacy & Security → Input Monitoring. macOS won't let the app read this touchscreen without it.")
         }
 
         // The touchscreen row names the monitor touches land on; its submenu picks another one.
         let display = model.connectedTouchscreen
         if deviceName == nil && inputMonitoringNeeded {
             // Without Input Monitoring the touchscreen may not show up at all, so don't call it unplugged.
-            touchscreenStatusMenuItem.title = "Touchscreen: Waiting for Input Monitoring"
+            touchscreenStatusMenuItem.title = L("Touchscreen: Waiting for Input Monitoring")
             touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
-            touchscreenStatusMenuItem.toolTip = "Allow Input Monitoring first; the touchscreen shows up after that."
+            touchscreenStatusMenuItem.toolTip = L("Allow Input Monitoring first; the touchscreen shows up after that.")
         } else if deviceName == nil {
-            touchscreenStatusMenuItem.title = "Touchscreen: Not Connected"
+            touchscreenStatusMenuItem.title = L("Touchscreen: Not Connected")
             touchscreenStatusMenuItem.image = Self.statusIcon(.problem)
-            touchscreenStatusMenuItem.toolTip = "Connect the touchscreen's USB cable."
+            touchscreenStatusMenuItem.toolTip = L("Connect the touchscreen's USB cable.")
         } else if let display {
-            touchscreenStatusMenuItem.title = "Touchscreen: \(display.name)"
+            touchscreenStatusMenuItem.title = String(format: L("Touchscreen: %@"), display.name)
             if !inputMonitoringNeeded {
                 touchscreenStatusMenuItem.image = Self.statusIcon(.good)
-                touchscreenStatusMenuItem.toolTip = "Touches land on this display. Pick another one if it's the wrong monitor."
+                touchscreenStatusMenuItem.toolTip = L("Touches land on this display. Pick another one if it's the wrong monitor.")
             } else {
                 touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
-                touchscreenStatusMenuItem.toolTip = "Connected, but no touches can be read until Input Monitoring is allowed."
+                touchscreenStatusMenuItem.toolTip = L("Connected, but no touches can be read until Input Monitoring is allowed.")
             }
         } else {
-            touchscreenStatusMenuItem.title = "Touchscreen: No Display Found"
+            touchscreenStatusMenuItem.title = L("Touchscreen: No Display Found")
             touchscreenStatusMenuItem.image = Self.statusIcon(.warning)
             touchscreenStatusMenuItem.toolTip = nil
         }
@@ -318,18 +320,18 @@ extension AppDelegate: NSMenuDelegate {
         let remembered = model.isAssignedScreenRemembered
 
         submenu.removeAllItems()
-        let header = NSMenuItem(title: "Touches Land On", action: nil, keyEquivalent: "")
+        let header = NSMenuItem(title: L("Touches Land On"), action: nil, keyEquivalent: "")
         header.isEnabled = false
         submenu.addItem(header)
 
-        let automatic = NSMenuItem(title: "Automatic", action: #selector(useAutomaticDisplay(_:)), keyEquivalent: "")
+        let automatic = NSMenuItem(title: L("Automatic"), action: #selector(useAutomaticDisplay(_:)), keyEquivalent: "")
         automatic.target = self
         automatic.state = remembered ? .off : .on
         submenu.addItem(automatic)
         submenu.addItem(.separator())
 
         for screen in model.connectedScreens {
-            let title = screen.isBuiltin ? "\(screen.name) (This Mac)" : screen.name
+            let title = screen.isBuiltin ? String(format: L("%@ (This Mac)"), screen.name) : screen.name
             let item = NSMenuItem(title: title, action: #selector(assignDisplay(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = NSNumber(value: screen.id)
@@ -380,7 +382,7 @@ class SettingsWindow: NSWindow {
                                     defer: true,
                                     screen: nil)
         
-        window.title = "TouchMyMac Settings"
+        window.title = L("TouchMyMac Settings")
         window.tabbingMode = .disallowed
         window.model = model
         // A regular window: it goes behind other apps once you click elsewhere,
@@ -431,7 +433,7 @@ class DebugOverlay: NSWindow {
                                     defer: true,
                                     screen: nil)
         
-        window.title = "Touches"
+        window.title = L("Touches")
         window.tabbingMode = .disallowed
         window.model = model
         
@@ -992,7 +994,7 @@ final class FloatingKeyboardView: NSView {
                 NSBezierPath(roundedRect: icon, xRadius: 6 * scale, yRadius: 6 * scale).fill()
             }
             drawSymbol(isCompact ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left",
-                       description: isCompact ? "Full-Size Keyboard" : "Mini Keyboard", in: icon,
+                       description: isCompact ? L("Full-Size Keyboard") : L("Mini Keyboard"), in: icon,
                        color: isPressed ? .white : .secondaryLabelColor, pointSize: 13)
         }
 
@@ -1026,13 +1028,13 @@ final class FloatingKeyboardView: NSView {
         let isShifted = latchedModifiers.contains(.maskShift)
 
         if key.role == .hide {
-            drawSymbol("keyboard.chevron.compact.down", description: "Hide Keyboard", in: rect, color: color)
+            drawSymbol("keyboard.chevron.compact.down", description: L("Hide Keyboard"), in: rect, color: color)
             return
         }
         if key.role == .inputSource {
             // Like the globe key on a Mac keyboard, with the current input source on the cap.
             let corner = NSRect(x: rect.minX + 4 * scale, y: rect.maxY - 20 * scale, width: 16 * scale, height: 16 * scale)
-            drawSymbol("globe", description: "Switch Input Source", in: corner, color: color, pointSize: 11)
+            drawSymbol("globe", description: L("Switch Input Source"), in: corner, color: color, pointSize: 11)
             drawText(inputSourceLabel, font: font(15), color: color, in: rect, horizontal: .center, vertical: .center)
             return
         }

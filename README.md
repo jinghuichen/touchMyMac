@@ -204,6 +204,12 @@ Many touchscreens made for Windows start as a single-touch mouse until the compu
 Raise Error Resistance and keep Ignore Origin Touches on. The Diagnostics pane shows live touch counts and the recognized gestures, which helps narrow it down.
 </details>
 
+<details>
+<summary><b>How do I switch the app between English and Chinese?</b></summary>
+
+TouchMyMac follows your system language: Simplified Chinese if it comes first in System Settings → General → Language & Region, English otherwise. To use another language just for TouchMyMac, add it under **Applications** on that page (macOS 13 or later) and reopen the app.
+</details>
+
 ## 🛠 Build from source
 
 ```bash
