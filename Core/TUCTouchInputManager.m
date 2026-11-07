@@ -1103,6 +1103,24 @@ static BOOL TUCIsInTitleBarBand(AXUIElementRef element, CGPoint location, CGFloa
     return inBand;
 }
 
+/// Whether `element` belongs to WindowManager, which draws Mission Control and Stage Manager.
+static BOOL TUCElementBelongsToWindowManager(AXUIElementRef element) {
+    pid_t pid = 0;
+    if (AXUIElementGetPid(element, &pid) != kAXErrorSuccess || pid <= 0) {
+        return NO;
+    }
+    static pid_t windowManagerPID = 0;
+    if (pid == windowManagerPID) {
+        return YES;
+    }
+    NSString *bundleID = [NSRunningApplication runningApplicationWithProcessIdentifier:pid].bundleIdentifier;
+    if ([bundleID isEqualToString:@"com.apple.WindowManager"]) {
+        windowManagerPID = pid; // it keeps its process until it restarts
+        return YES;
+    }
+    return NO;
+}
+
 /**
  Whether a drag starting at `location` (global display coordinates) should press and drag rather than
  scroll: on a control that follows a drag, a split view divider within `splitterReach` points, or the
@@ -1117,13 +1135,22 @@ static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReac
     });
     *pressLocation = location;
 
-    if (splitterReach > 0 && TUCFindNearbyWindowEdge(location, splitterReach, kWindowEdgeInsidePoints, kWindowCornerInsidePoints, pressLocation)) {
-        return YES;
-    }
-
     AXUIElementRef underFinger = NULL;
     if (AXUIElementCopyElementAtPosition(systemWide, location.x, location.y, &underFinger) != kAXErrorSuccess || underFinger == NULL) {
         return NO;
+    }
+
+    // Mission Control (and Stage Manager) belong to WindowManager. Nothing there scrolls, and windows
+    // and desktops are dragged around, so a drag there always presses. This comes before the window
+    // edges, which still report where the windows were before Mission Control shrank them.
+    if (TUCElementBelongsToWindowManager(underFinger)) {
+        CFRelease(underFinger);
+        return YES;
+    }
+
+    if (splitterReach > 0 && TUCFindNearbyWindowEdge(location, splitterReach, kWindowEdgeInsidePoints, kWindowCornerInsidePoints, pressLocation)) {
+        CFRelease(underFinger);
+        return YES;
     }
 
     // The element under the finger, or one of its two parents, follows a drag (a slider's knob, a scroll bar).

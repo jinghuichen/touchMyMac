@@ -184,7 +184,7 @@ xattr -dr com.apple.quarantine /Applications/TouchMyMac.app
 
 Pausing longer than the Hold Duration before you move starts a drag. Start moving sooner, or raise Hold Duration in Settings → Tuning.
 
-Sliders, scroll bars, dividers, window title bars and window edges move as soon as you drag them. A finger that lands a little beside a divider or a window edge still grabs it. If you'd rather scroll everywhere, turn off Drag Controls Directly in Settings → Gestures.
+Sliders, scroll bars, dividers, window title bars and window edges move as soon as you drag them. A finger that lands a little beside a divider or a window edge still grabs it. In Mission Control, windows move as soon as you drag them too. If you'd rather scroll everywhere, turn off Drag Controls Directly in Settings → Gestures.
 </details>
 
 <details>

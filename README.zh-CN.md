@@ -184,7 +184,7 @@ xattr -dr com.apple.quarantine /Applications/TouchMyMac.app
 
 手指放上去后停顿超过 Hold Duration 再移动，就会变成拖拽。起手时早点移动，或者在 Settings → Tuning 里把 Hold Duration 调大。
 
-滑块、滚动条、分割线、窗口标题栏和窗口边缘一拖就会动，手指落在分割线或窗口边缘旁边一点也能抓住。如果你希望所有地方拖动都是滚动，可以在 Settings → Gestures 里关掉 Drag Controls Directly。
+滑块、滚动条、分割线、窗口标题栏和窗口边缘一拖就会动，手指落在分割线或窗口边缘旁边一点也能抓住。调度中心里的窗口也是一拖就动。如果你希望所有地方拖动都是滚动，可以在 Settings → Gestures 里关掉 Drag Controls Directly。
 </details>
 
 <details>
