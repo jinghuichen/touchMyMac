@@ -95,7 +95,7 @@ class TouchMyMac: NSObject, ObservableObject {
 
     
     
-    @Published var holdDuration: TimeInterval = 0.1
+    @Published var holdDuration: TimeInterval = 0.4
     @Published var doubleClickDistance: CGFloat = 3 //mm
     @Published var errorResistance: NSInteger = 0 // num of Reports to wait before cancelling a touch
     @Published var ignoreOriginTouches: Bool = false
@@ -635,7 +635,7 @@ extension TouchMyMac {
         let defaults = UserDefaults.standard
         
         defaults.register(defaults: [
-            "holdDuration" : 0.1,
+            "holdDuration" : 0.4,
             "doubleClickDistance" : 8,
             "errorResistance" : 4,
             "ignoreOriginTouches" : true,
@@ -655,6 +655,10 @@ extension TouchMyMac {
         ])
         
         holdDuration = defaults.double(forKey: "holdDuration")
+        if holdDuration < 0.2 {
+            // Before 1.8 a hold started after 0.1 s, shorter than many taps, so taps turned into presses.
+            holdDuration = 0.4
+        }
         doubleClickDistance = defaults.double(forKey: "doubleClickDistance")
         errorResistance = defaults.integer(forKey: "errorResistance")
         ignoreOriginTouches = defaults.bool(forKey: "ignoreOriginTouches")
@@ -980,7 +984,7 @@ extension TouchMyMac {
             
         case \.holdDuration:
             return(L("Hold Duration"),
-                   L("How long do you have to hold finger to initiate hold&drag"))
+                   L("Hold a finger still this long to press the mouse button. Then move to drag, for example to select text or move files."))
             
         case \.doubleClickDistance:
             return(L("Double Click Zone"),

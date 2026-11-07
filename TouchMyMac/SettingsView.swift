@@ -184,6 +184,8 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
             )
+            // A plain button only takes clicks on its drawn content; this makes the whole row hit-testable.
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -354,11 +356,11 @@ struct SettingsView: View {
                 sliderRow(
                     labels: model.uiLabels(for: \.holdDuration),
                     value: $model.holdDuration,
-                    range: 0.0...0.16,
-                    step: 0.02,
+                    range: 0.2...1.0,
+                    step: 0.05,
                     currentText: { String(format: L("Current %.2f s"), $0) },
-                    minText: L("0.00 s"),
-                    maxText: L("0.16 s")
+                    minText: L("0.20 s"),
+                    maxText: L("1.00 s")
                 )
                 sectionDivider
                 sliderRow(

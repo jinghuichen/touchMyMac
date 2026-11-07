@@ -120,7 +120,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 |---|---|---|
 | Open at Login | Off | Start TouchMyMac when you log in (macOS 13 or later) |
 | Drag Controls Directly | On | Sliders, scroll bars, splitters and title bars follow your finger right away; elsewhere, dragging scrolls |
-| Hold Duration | 0.1 s | How long to hold still before moving turns into a drag instead of a scroll |
+| Hold Duration | 0.4 s | How long a finger holds still before the mouse button goes down, so moving drags instead of scrolling |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
 | Hide Pointer While Scrolling | On | Hide the pointer while your finger scrolls |
 | Scroll Inertia | On | Keep scrolling after a flick |

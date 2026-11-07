@@ -120,7 +120,7 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 |---|---|---|
 | Open at Login | 关 | 登录时自动启动 TouchMyMac（需要 macOS 13 或更高版本） |
 | Drag Controls Directly | 开 | 滑块、滚动条、分割线和标题栏会直接跟着手指走；其他地方拖动仍是滚动 |
-| Hold Duration | 0.1 秒 | 停住多久之后再移动，会变成拖拽而不是滚动 |
+| Hold Duration | 0.4 秒 | 手指按住不动多久之后按下鼠标键，之后移动就是拖拽而不是滚动 |
 | Scroll Speed | 1.0 | 手指移动多少，内容就滚多少；1.0 表示内容紧贴手指 |
 | Hide Pointer While Scrolling | 开 | 手指滚动期间隐藏指针 |
 | Scroll Inertia | 开 | 甩动后继续滚动 |

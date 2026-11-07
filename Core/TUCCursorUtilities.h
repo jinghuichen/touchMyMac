@@ -19,18 +19,18 @@ NS_ASSUME_NONNULL_BEGIN
 /// Enables/disables inertial scrolling after a finger lifts.
 @property (nonatomic) BOOL momentumScrollEnabled;
 
-/// Controls how quickly inertial scrolling slows down per 60Hz frame.
-/// Default matches the built-in tuning.
+/// How quickly inertia slows down, in the old per-60Hz-frame terms (0.85-0.99). The default 0.92 gives
+/// Android's scroll friction; higher values mean less friction and a longer glide.
 @property (nonatomic) CGFloat momentumDecelerationPerFrame;
 
-/// Scales how far inertia glides (1.0 = unchanged). Inertia always starts at the release velocity.
+/// Scales how far and how long inertia glides (1.0 = Android). Inertia always starts at the release velocity.
 @property (nonatomic) CGFloat momentumVelocityMultiplier;
+
+/// Points per millimetre on the touchscreen, so inertia covers the same physical distance on any display.
+@property (nonatomic) CGFloat momentumPointsPerMM;
 
 /// Minimum finger velocity (px/s) needed to start inertial scrolling on liftoff.
 @property (nonatomic) CGFloat momentumStartThreshold;
-
-/// Velocity (px/s) below which inertial scrolling stops.
-@property (nonatomic) CGFloat momentumVelocityStopThreshold;
 
 /// Hides the pointer while a finger scrolls, since scrolling leaves it where it was.
 @property (nonatomic) BOOL hidesCursorWhileScrolling;
@@ -38,6 +38,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (CGPoint)currentCursorLocation;
 
 - (void)moveCursorTo:(CGPoint)aLocation;
+/// Moves the pointer without ending a scroll or its inertia, e.g. to where a scrolling finger lifted.
+- (void)movePointerKeepingScrollTo:(CGPoint)aLocation;
 
 - (void)performClickAt:(CGPoint)aLocation;
 

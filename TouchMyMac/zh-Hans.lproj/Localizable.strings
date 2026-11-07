@@ -106,7 +106,7 @@
 "Example: fn or cmd+shift" = "例如：fn 或 cmd+shift";
 "Example: cmd+a, delete" = "例如：cmd+a, delete";
 "Hold Duration" = "按住时长";
-"How long do you have to hold finger to initiate hold&drag" = "手指要按住多久才开始按住拖拽";
+"Hold a finger still this long to press the mouse button. Then move to drag, for example to select text or move files." = "手指按住不动这么久，就会按下鼠标键。之后移动手指就是拖拽，比如选文字、拖文件。";
 "Double Click Zone" = "双击范围";
 "How many mm can two taps be apart from each other to qualify double click" = "两次轻点相距多少毫米以内算作双击";
 "Ignore Origin Touches" = "忽略原点触摸";
@@ -132,8 +132,8 @@
 "Current %.2fx" = "当前 %.2fx";
 "Current %.3f" = "当前 %.3f";
 "Current %d" = "当前 %d";
-"0.00 s" = "0.00 秒";
-"0.16 s" = "0.16 秒";
+"0.20 s" = "0.20 秒";
+"1.00 s" = "1.00 秒";
 
 /* MARK: - Diagnostics actions */
 "Grant Accessibility Access" = "授予辅助功能权限";
