@@ -34,6 +34,9 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 @property BOOL longPressFeedbackShown;
 @property NSInteger controlLookupSession; // bumped per touch, so a late answer can't apply to the next touch
 @property CGPoint controlPressLocation; // where a control drag presses (global), e.g. snapped onto a divider
+@property BOOL fingerOnDesktopBar; // on Mission Control's row of desktops, whose close buttons need Option to show
+@property BOOL holdingOptionForDesktopBar;
+@property (strong) NSDate *optionDownDate;
 @property TUCCursorAction lastPerformedAction;
 @property BOOL suppressEndedPrimaryTouchAction;
 @property BOOL cursorTouchStoppedMomentum; // the touch landed on visibly moving inertia, so lifting it is not a click
@@ -104,8 +107,11 @@ static const CGFloat kSplitterReachMM = 4; // a finger this close to a divider g
 static const CGFloat kTitleBarBandPoints = 40; // the top of a window that drags it, for apps that don't report a title bar
 static const CGFloat kWindowEdgeInsidePoints = 4; // a finger this far inside a window's edge resizes it (macOS itself: 3)
 static const CGFloat kWindowCornerInsidePoints = 14; // near both edges this far inside, the corner resizes it
+static const NSTimeInterval kDesktopCloseButtonsAppearTime = 0.15; // Option shows Mission Control's close buttons, fading in
 
 static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReach, CGFloat titleBarHeight, CGPoint *pressLocation);
+static BOOL TUCIsOnMissionControlDesktopBar(CGPoint location);
+static void TUCPostOptionKey(bool down);
 // Inertia slower than this (points per second, under ~1.3 points per 60Hz frame) looks stopped,
 // so a tap then is a click. Faster, the tap only stops the scroll, like on iPad.
 static const CGFloat kTapStopsMomentumSpeed = 80.0f;
@@ -426,7 +432,9 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         // Read before this touch-down stops the inertia.
         self.cursorTouchStoppedMomentum = [TUCCursorUtilities sharedInstance].momentumScrollSpeed >= kTapStopsMomentumSpeed;
         self.controlUnderCursorTouch = TUCControlUnderTouchOther;
-        if (self.dragsControlsDirectly && isOnSurface) {
+        [self releaseOptionForDesktopBar];
+        self.fingerOnDesktopBar = NO;
+        if (isOnSurface) {
             [self lookUpControlAtLocation:[self convertScreenPointRelativeToAbsolute:point]];
         }
     }
@@ -616,8 +624,21 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         
         [self stopCurrentGesture];
         
-        if (!suppressEndedAction && shouldTreatAsTap && !self.cursorTouchStoppedMomentum) {
+        NSTimeInterval optionShownFor = self.holdingOptionForDesktopBar ? -[self.optionDownDate timeIntervalSinceNow] : INFINITY;
+        if (!suppressEndedAction && shouldTreatAsTap && !self.cursorTouchStoppedMomentum && optionShownFor < kDesktopCloseButtonsAppearTime) {
+            // The close buttons are still fading in; click once they're there.
+            CGPoint location = [self convertScreenPointRelativeToAbsolute:self.cursorTouchStartLocation];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((kDesktopCloseButtonsAppearTime - optionShownFor) * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [[TUCCursorUtilities sharedInstance] performClickAt:location];
+                [self releaseOptionForDesktopBarSoon];
+            });
+        } else if (!suppressEndedAction && shouldTreatAsTap && !self.cursorTouchStoppedMomentum) {
             [self performMouseEventForGesture:TUCCursorGestureTap];
+        }
+
+        if (optionShownFor >= kDesktopCloseButtonsAppearTime || !shouldTreatAsTap || suppressEndedAction || self.cursorTouchStoppedMomentum) {
+            [self releaseOptionForDesktopBarSoon];
         }
 
         // The ended touch lingers in the set for a moment. Release it so reports from other
@@ -701,7 +722,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
                 && [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate] < kControlLookupWait) {
                 return; // the answer is usually back within a few milliseconds
             }
-            if (self.controlUnderCursorTouch == TUCControlUnderTouchDraggable) {
+            if (self.controlUnderCursorTouch == TUCControlUnderTouchDraggable && self.dragsControlsDirectly) {
                 [self beginControlDrag];
                 return;
             }
@@ -726,16 +747,22 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     NSInteger session = ++self.controlLookupSession;
     self.controlUnderCursorTouch = TUCControlUnderTouchPending;
     self.controlPressLocation = location;
-    CGFloat splitterReach = kSplitterReachMM * [[self touchscreen] pixelsPerMM];
+    CGFloat pointsPerMM = [[self touchscreen] pixelsPerMM];
+    CGFloat splitterReach = kSplitterReachMM * pointsPerMM;
     __weak typeof(self) weakSelf = self;
     dispatch_async(queue, ^{
         CGPoint pressLocation = location;
         BOOL draggable = TUCDraggableControlAtLocation(location, splitterReach, kTitleBarBandPoints, &pressLocation);
+        BOOL onDesktopBar = draggable && TUCIsOnMissionControlDesktopBar(location);
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) strongSelf = weakSelf;
             if (strongSelf.controlLookupSession == session && strongSelf.controlUnderCursorTouch == TUCControlUnderTouchPending) {
                 strongSelf.controlUnderCursorTouch = draggable ? TUCControlUnderTouchDraggable : TUCControlUnderTouchOther;
                 strongSelf.controlPressLocation = pressLocation;
+                strongSelf.fingerOnDesktopBar = onDesktopBar;
+                if (onDesktopBar && strongSelf.cursorTouch != nil) {
+                    [strongSelf holdOptionForDesktopBar];
+                }
             }
         });
     });
@@ -750,6 +777,51 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     [[TUCCursorUtilities sharedInstance] dragCursorTo:self.controlPressLocation phase:NSTouchPhaseBegan];
     self.lastPerformedAction = TUCCursorActionDrag;
     [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
+}
+
+/**
+ Mission Control draws a desktop's close button only after the pointer rests on the desktop, which a
+ touch never does, so a tap on the button switched to the desktop instead. Holding Option shows every
+ close button at once; it's held while a finger is on the row of desktops.
+ */
+- (void)holdOptionForDesktopBar {
+    if (self.holdingOptionForDesktopBar) {
+        return;
+    }
+    self.holdingOptionForDesktopBar = YES;
+    self.optionDownDate = [NSDate date];
+    TUCPostOptionKey(true);
+}
+
+- (void)releaseOptionForDesktopBar {
+    if (!self.holdingOptionForDesktopBar) {
+        return;
+    }
+    self.holdingOptionForDesktopBar = NO;
+    TUCPostOptionKey(false);
+}
+
+/// Releases Option once a click that was just posted has finished.
+- (void)releaseOptionForDesktopBarSoon {
+    if (!self.holdingOptionForDesktopBar) {
+        return;
+    }
+    NSDate *downDate = self.optionDownDate;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (weakSelf.optionDownDate == downDate) { // not held again by a newer touch
+            [weakSelf releaseOptionForDesktopBar];
+        }
+    });
+}
+
+static void TUCPostOptionKey(bool down) {
+    CGEventRef event = CGEventCreateKeyboardEvent(NULL, 58 /* kVK_Option */, down);
+    if (event != NULL) {
+        CGEventSetFlags(event, down ? kCGEventFlagMaskAlternate : 0);
+        CGEventPost(kCGHIDEventTap, event);
+        CFRelease(event);
+    }
 }
 
 /// Whether the cursor finger has stayed a possible tap for the hold duration, making it a long press.
@@ -1119,6 +1191,68 @@ static BOOL TUCElementBelongsToWindowManager(AXUIElementRef element) {
         return YES;
     }
     return NO;
+}
+
+static BOOL TUCElementCanRemoveDesktop(AXUIElementRef element) {
+    CFArrayRef actions = NULL;
+    if (AXUIElementCopyActionNames(element, &actions) != kAXErrorSuccess || actions == NULL) {
+        return NO;
+    }
+    BOOL can = CFArrayContainsValue(actions, CFRangeMake(0, CFArrayGetCount(actions)), CFSTR("AXRemoveDesktop"));
+    CFRelease(actions);
+    return can;
+}
+
+/// Whether `element` or something up to `depth` levels inside it is a Mission Control desktop.
+static BOOL TUCElementHoldsDesktop(AXUIElementRef element, int depth) {
+    if (TUCElementCanRemoveDesktop(element)) {
+        return YES;
+    }
+    if (depth == 0) {
+        return NO;
+    }
+    BOOL holds = NO;
+    CFTypeRef children = NULL;
+    if (AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, &children) == kAXErrorSuccess && children != NULL) {
+        if (CFGetTypeID(children) == CFArrayGetTypeID()) {
+            for (id child in (__bridge NSArray *)children) {
+                if (TUCElementHoldsDesktop((__bridge AXUIElementRef)child, depth - 1)) {
+                    holds = YES;
+                    break;
+                }
+            }
+        }
+        CFRelease(children);
+    }
+    return holds;
+}
+
+/**
+ Whether `location` is on Mission Control's row of desktops: on a desktop, or on the row around them
+ (the Spaces Bar holds a list that holds the desktops).
+ */
+static BOOL TUCIsOnMissionControlDesktopBar(CGPoint location) {
+    static AXUIElementRef systemWide;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        systemWide = AXUIElementCreateSystemWide();
+        AXUIElementSetMessagingTimeout(systemWide, 0.05);
+    });
+    AXUIElementRef element = NULL;
+    if (AXUIElementCopyElementAtPosition(systemWide, location.x, location.y, &element) != kAXErrorSuccess || element == NULL) {
+        return NO;
+    }
+    BOOL onBar = TUCElementBelongsToWindowManager(element) && TUCElementHoldsDesktop(element, 2);
+    if (!onBar && TUCElementBelongsToWindowManager(element)) {
+        // Something inside a desktop, such as its label.
+        AXUIElementRef parent = TUCCopyParent(element);
+        onBar = parent != NULL && TUCElementCanRemoveDesktop(parent);
+        if (parent != NULL) {
+            CFRelease(parent);
+        }
+    }
+    CFRelease(element);
+    return onBar;
 }
 
 /**
