@@ -903,6 +903,24 @@ extension TouchMyMac: TUCTouchDelegate {
         }
     }
 
+    func touchDidBeginLongPress(atScreenLocation location: CGPoint) {
+        performUIUpdate {
+            (NSApp.delegate as? AppDelegate)?.pressIndicatorPanel.show(atScreenLocation: location)
+        }
+    }
+
+    func touchLongPressDidMove(toScreenLocation location: CGPoint) {
+        performUIUpdate {
+            (NSApp.delegate as? AppDelegate)?.pressIndicatorPanel.move(toScreenLocation: location)
+        }
+    }
+
+    func touchDidEndLongPress() {
+        performUIUpdate {
+            (NSApp.delegate as? AppDelegate)?.pressIndicatorPanel.hide()
+        }
+    }
+
     func performCustomAction(_ action: TUCCursorAction) {
         performUIUpdate {
             switch action {

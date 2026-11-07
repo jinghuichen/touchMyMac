@@ -48,6 +48,18 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (void)performCustomAction:(TUCCursorAction)action;
 
+@optional
+/**
+ A finger held still long enough to press the mouse button (a long press), at this location in global
+ display coordinates. Moving it now drags. Useful for showing that the press took.
+ */
+- (void)touchDidBeginLongPressAtScreenLocation:(CGPoint)location;
+/// The long-pressing finger moved (dragging), in global display coordinates.
+- (void)touchLongPressDidMoveToScreenLocation:(CGPoint)location;
+/// The long press ended: the finger lifted or the gesture changed.
+- (void)touchDidEndLongPress;
+@required
+
 
 
 #pragma mark - Claimed Touches

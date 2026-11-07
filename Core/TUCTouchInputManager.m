@@ -30,6 +30,8 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 @property (strong) NSDate *cursorTouchBeganDate;
 @property CGPoint cursorTouchStartLocation;
 @property TUCControlUnderTouch controlUnderCursorTouch;
+@property BOOL deviceReportsLiftoff; // the screen sends liftoffs, so a quiet finger is still down
+@property BOOL longPressFeedbackShown;
 @property NSInteger controlLookupSession; // bumped per touch, so a late answer can't apply to the next touch
 @property TUCCursorAction lastPerformedAction;
 @property BOOL suppressEndedPrimaryTouchAction;
@@ -100,7 +102,11 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location);
 // so a tap then is a click. Faster, the tap only stops the scroll, like on iPad.
 static const CGFloat kTapStopsMomentumSpeed = 80.0f;
 static const CGFloat kScrollReanchorDistanceMM = 25.0f;
+// Some screens never report a liftoff, they just stop reporting; then a touch ends after this much silence.
 static const NSTimeInterval kTouchInactivityTimeout = 0.12;
+// Screens that do report liftoffs may also go quiet while a finger rests still. Ending the touch then
+// released long presses mid-drag, so once a liftoff has been seen only a much longer silence ends a touch.
+static const NSTimeInterval kTouchInactivityTimeoutWithLiftoffs = 1.0;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxHorizontalTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxVerticalTravelMM = 18.0f;
@@ -156,6 +162,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 }
 
 - (void)didConnectTouchscreen {
+    self.deviceReportsLiftoff = NO;
     [self.delegate touchscreenDidConnect];
 }
 
@@ -212,6 +219,11 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         return;
     }
 
+    // A finger resting still may send no reports, so the hold is also checked here, on time.
+    if (self.postMouseEvents && self.cursorTouch.isActive && [self cursorTouchReachedHold]) {
+        [self beginLongPress];
+    }
+
     NSDate *now = [NSDate date];
     BOOL didChange = NO;
 
@@ -228,7 +240,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         }
 
         NSTimeInterval idle = [now timeIntervalSinceDate:lastUpdatedAt];
-        if (idle < kTouchInactivityTimeout) {
+        if (idle < (self.deviceReportsLiftoff ? kTouchInactivityTimeoutWithLiftoffs : kTouchInactivityTimeout)) {
             continue;
         }
 
@@ -333,6 +345,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
 
 - (void)stopCurrentGesture {
+    if (self.longPressFeedbackShown) {
+        self.longPressFeedbackShown = NO;
+        if ([self.delegate respondsToSelector:@selector(touchDidEndLongPress)]) {
+            [self.delegate touchDidEndLongPress];
+        }
+    }
     [[TUCCursorUtilities sharedInstance] stopDraggingCursor];
     [[TUCCursorUtilities sharedInstance] stopMagnifying];
     [[TUCCursorUtilities sharedInstance] endScrollGesture];
@@ -357,6 +375,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         if (liftedTouch == nil) {
             return; // a liftoff for a contact that already ended
         }
+        self.deviceReportsLiftoff = YES;
     } else if (self.ignoreOriginTouches && CGPointEqualToPoint(digitizerPoint, CGPointZero)) {
         // Some screens send stray contacts at (0,0).
         return;
@@ -541,9 +560,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     }
 
     if ((phase == NSTouchPhaseStationary || phase == NSTouchPhaseMoved) && [self cursorTouchReachedHold]) {
-        // A long press: the mouse goes down where the finger landed. Moving on drags (selecting text,
-        // moving files) and lifting releases, which is a click if the finger didn't move.
-        [self pressAtLandingLocation];
+        [self beginLongPress];
         return;
     }
     
@@ -655,6 +672,9 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
     if (self.cursorTouchDidHold) {
         [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
+        if (self.longPressFeedbackShown && [self.delegate respondsToSelector:@selector(touchLongPressDidMoveToScreenLocation:)]) {
+            [self.delegate touchLongPressDidMoveToScreenLocation:[self convertScreenPointRelativeToAbsolute:cursorTouch.location]];
+        }
     } else {
         // Still a possible tap: wait for the finger to leave the tap slop or lift.
         if (self.cursorTouchQualifiedForTap) {
@@ -716,6 +736,16 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         && !self.cursorTouchStoppedMomentum // a touch that stopped inertia is not pressing anything
         && self.cursorTouchBeganDate != nil
         && [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate] >= self.holdDuration;
+}
+
+/// A long press: the mouse goes down where the finger landed. Moving on drags (selecting text, moving
+/// files, windows in Mission Control) and lifting releases, which is a click if the finger didn't move.
+- (void)beginLongPress {
+    [self pressAtLandingLocation];
+    if ([self.delegate respondsToSelector:@selector(touchDidBeginLongPressAtScreenLocation:)]) {
+        self.longPressFeedbackShown = YES;
+        [self.delegate touchDidBeginLongPressAtScreenLocation:[self convertScreenPointRelativeToAbsolute:self.cursorTouchStartLocation]];
+    }
 }
 
 /// Presses the mouse button where the cursor finger landed; later moves drag and liftoff releases.

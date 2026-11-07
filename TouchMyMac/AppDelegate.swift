@@ -40,6 +40,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return DebugOverlay.overlay(model: self.model)
     }()
 
+    lazy var pressIndicatorPanel = PressIndicatorPanel()
+
     lazy var floatingKeyboardPanel: FloatingKeyboardPanel = {
         return FloatingKeyboardPanel(model: self.model)
     }()
@@ -129,6 +131,87 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func hideFloatingKeyboard() {
         self.floatingKeyboardPanel.orderOut(nil)
+    }
+}
+
+
+/// A soft dot under the finger while a long press holds the mouse button down. It appears when the press
+/// takes, follows the finger while dragging and fades when it lifts. It never takes clicks or focus.
+final class PressIndicatorPanel: NSPanel {
+
+    private static let panelSize: CGFloat = 52
+    private static let dotSize: CGFloat = 24
+    private let dot = CAShapeLayer()
+
+    init() {
+        let frame = NSRect(x: 0, y: 0, width: Self.panelSize, height: Self.panelSize)
+        super.init(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = true
+        level = .screenSaver
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+
+        let view = NSView(frame: frame)
+        view.wantsLayer = true
+        let inset = (Self.panelSize - Self.dotSize) / 2
+        dot.frame = frame
+        dot.path = CGPath(ellipseIn: frame.insetBy(dx: inset, dy: inset), transform: nil)
+        dot.fillColor = NSColor(white: 1, alpha: 0.35).cgColor
+        dot.strokeColor = NSColor(white: 1, alpha: 0.9).cgColor
+        dot.lineWidth = 1.5
+        dot.shadowColor = NSColor.black.cgColor
+        dot.shadowOpacity = 0.35
+        dot.shadowRadius = 4
+        dot.shadowOffset = .zero
+        dot.opacity = 0
+        view.layer?.addSublayer(dot)
+        contentView = view
+    }
+
+    /// Locations are in global display coordinates (origin at the top left of the main display).
+    private func center(on location: CGPoint) {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        setFrameOrigin(NSPoint(x: location.x - Self.panelSize / 2, y: primaryHeight - location.y - Self.panelSize / 2))
+    }
+
+    func show(atScreenLocation location: CGPoint) {
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(orderOutAfterHiding), object: nil)
+        center(on: location)
+        animate(fromScale: 1.35, toScale: 1, toOpacity: 1, duration: 0.12)
+        orderFrontRegardless()
+    }
+
+    func move(toScreenLocation location: CGPoint) {
+        center(on: location)
+    }
+
+    func hide() {
+        guard isVisible else { return }
+        animate(fromScale: 1, toScale: 0.7, toOpacity: 0, duration: 0.15)
+        perform(#selector(orderOutAfterHiding), with: nil, afterDelay: 0.16)
+    }
+
+    private func animate(fromScale: CGFloat, toScale: CGFloat, toOpacity: Float, duration: CFTimeInterval) {
+        let scale = CABasicAnimation(keyPath: "transform.scale")
+        scale.fromValue = fromScale
+        scale.toValue = toScale
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = dot.presentation()?.opacity ?? dot.opacity
+        fade.toValue = toOpacity
+        let group = CAAnimationGroup()
+        group.animations = [scale, fade]
+        group.duration = duration
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        dot.opacity = toOpacity
+        dot.transform = CATransform3DMakeScale(toScale, toScale, 1)
+        dot.removeAllAnimations()
+        dot.add(group, forKey: "press")
+    }
+
+    @objc private func orderOutAfterHiding() {
+        orderOut(nil)
     }
 }
 
