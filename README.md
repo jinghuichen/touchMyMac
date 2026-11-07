@@ -131,7 +131,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Setting | Default | What it does |
 |---|---|---|
 | Open at Login | Off | Start TouchMyMac when you log in (macOS 13 or later) |
-| Drag Controls Directly | On | Sliders, scroll bars, splitters and title bars follow your finger right away; elsewhere, dragging scrolls |
+| Drag Controls Directly | On | Sliders, scroll bars, dividers, title bars and window edges follow your finger right away, even from a little beside a divider or edge; elsewhere, dragging scrolls |
 | Hold Duration | 0.4 s | How long a finger holds still before the mouse button goes down, so moving drags instead of scrolling |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
 | Hide Pointer While Scrolling | On | Hide the pointer while your finger scrolls |
@@ -184,7 +184,7 @@ xattr -dr com.apple.quarantine /Applications/TouchMyMac.app
 
 Pausing longer than the Hold Duration before you move starts a drag. Start moving sooner, or raise Hold Duration in Settings → Tuning.
 
-Sliders, scroll bars, splitters and window title bars move as soon as you drag them. If you'd rather scroll everywhere, turn off Drag Controls Directly in Settings → Gestures.
+Sliders, scroll bars, dividers, window title bars and window edges move as soon as you drag them. A finger that lands a little beside a divider or a window edge still grabs it. If you'd rather scroll everywhere, turn off Drag Controls Directly in Settings → Gestures.
 </details>
 
 <details>

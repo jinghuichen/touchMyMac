@@ -94,7 +94,7 @@
 "Three-Finger Swipe Up" = "三指上滑";
 "Swipe up with three fingers to open Mission Control." = "三指上滑打开调度中心。";
 "Drag Controls Directly" = "直接拖动控件";
-"Sliders, scroll bars, splitters and window title bars follow your finger right away. Elsewhere, dragging scrolls unless you hold still first." = "滑块、滚动条、分割线和窗口标题栏会立刻跟随手指。其他地方拖动是滚动，除非先按住不动。";
+"Sliders, scroll bars, dividers, window title bars and window edges follow your finger right away, even if your finger lands a little beside a divider or edge. Elsewhere, dragging scrolls unless you hold still first." = "滑块、滚动条、分割线、窗口标题栏和窗口边缘会立刻跟随手指，手指落在分割线或窗口边缘旁边一点也能抓住。其他地方拖动是滚动，除非先按住不动。";
 "Three-Finger Swipe Left / Right" = "三指左右轻扫";
 "Swipe left or right with three fingers to move between spaces and full-screen apps." = "三指左右轻扫，在桌面空间和全屏 App 之间切换。";
 "Four-Finger Swipe Up Keyboard" = "四指上滑呼出键盘";

@@ -988,7 +988,7 @@ extension TouchMyMac {
 
         case \.isControlDragEnabled:
             return(L("Drag Controls Directly"),
-                   L("Sliders, scroll bars, splitters and window title bars follow your finger right away. Elsewhere, dragging scrolls unless you hold still first."))
+                   L("Sliders, scroll bars, dividers, window title bars and window edges follow your finger right away, even if your finger lands a little beside a divider or edge. Elsewhere, dragging scrolls unless you hold still first."))
 
         case \.isThreeFingerSwipeSpacesEnabled:
             return(L("Three-Finger Swipe Left / Right"),
