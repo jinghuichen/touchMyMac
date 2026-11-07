@@ -65,7 +65,7 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 | 轻点 | 点击（快速点两下为双击） |
 | 单指拖动 | 滚动，甩一下会带惯性 |
 | 按住不动 0.4 秒再移动 | 拖拽（选中文字、移动窗口和文件），按下时手指下会出现小圆点 |
-| 拖动滑块、滚动条、分割线或标题栏 | 直接拖动它，不用先按住 |
+| 拖动滑块、滚动条、分割线、标题栏或窗口边缘 | 直接拖动它，不用先按住 |
 | 双指同时轻点 | 右键，和 Mac 触控板一样 |
 | 双指捏合 | 以手指为中心缩放（倍率可在 Pinch Zoom Speed 里调） |
 | 三指上滑 | 调度中心 |
@@ -131,7 +131,7 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 | 设置项 | 默认值 | 作用 |
 |---|---|---|
 | Open at Login | 关 | 登录时自动启动 TouchMyMac（需要 macOS 13 或更高版本） |
-| Drag Controls Directly | 开 | 滑块、滚动条、分割线和标题栏会直接跟着手指走；其他地方拖动仍是滚动 |
+| Drag Controls Directly | 开 | 滑块、滚动条、分割线、标题栏和窗口边缘会直接跟着手指走，落在分割线或边缘旁边一点也能抓住；其他地方拖动仍是滚动 |
 | Hold Duration | 0.4 秒 | 手指按住不动多久之后按下鼠标键，之后移动就是拖拽而不是滚动 |
 | Scroll Speed | 1.0 | 手指移动多少，内容就滚多少；1.0 表示内容紧贴手指 |
 | Hide Pointer While Scrolling | 开 | 手指滚动期间隐藏指针 |
@@ -184,7 +184,7 @@ xattr -dr com.apple.quarantine /Applications/TouchMyMac.app
 
 手指放上去后停顿超过 Hold Duration 再移动，就会变成拖拽。起手时早点移动，或者在 Settings → Tuning 里把 Hold Duration 调大。
 
-滑块、滚动条、分割线和窗口标题栏一拖就会动。如果你希望所有地方拖动都是滚动，可以在 Settings → Gestures 里关掉 Drag Controls Directly。
+滑块、滚动条、分割线、窗口标题栏和窗口边缘一拖就会动，手指落在分割线或窗口边缘旁边一点也能抓住。如果你希望所有地方拖动都是滚动，可以在 Settings → Gestures 里关掉 Drag Controls Directly。
 </details>
 
 <details>
