@@ -793,6 +793,10 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
     return self.isMomentumActive;
 }
 
+- (CGFloat)momentumScrollSpeed {
+    return self.isMomentumActive ? TUCLength(self.momentumScrollVelocity) : 0;
+}
+
 - (void)startMomentumWithVelocity:(CGPoint)velocity at:(CFTimeInterval)now {
     [self cancelMomentumScroll];
 

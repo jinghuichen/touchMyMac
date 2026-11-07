@@ -34,7 +34,7 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 @property NSInteger controlLookupSession; // bumped per touch, so a late answer can't apply to the next touch
 @property TUCCursorAction lastPerformedAction;
 @property BOOL suppressEndedPrimaryTouchAction;
-@property BOOL cursorTouchStoppedMomentum; // the touch landed during inertia, so lifting it is not a click
+@property BOOL cursorTouchStoppedMomentum; // the touch landed on visibly moving inertia, so lifting it is not a click
 
 // A touch session lasts from the first finger landing until all fingers lifted.
 @property NSInteger sessionMaxTouchCount;
@@ -91,6 +91,9 @@ static const NSTimeInterval kControlLookupWait = 0.08; // how long a moving fing
 
 static BOOL TUCIsDraggableControlAtLocation(CGPoint location);
 static const CGFloat kTapFallbackDistanceMM = 5.0f;
+// Inertia slower than this (points per second, under ~1.3 points per 60Hz frame) looks stopped,
+// so a tap then is a click. Faster, the tap only stops the scroll, like on iPad.
+static const CGFloat kTapStopsMomentumSpeed = 80.0f;
 static const NSTimeInterval kTapFallbackDuration = 0.25;
 static const CGFloat kScrollReanchorDistanceMM = 25.0f;
 static const NSTimeInterval kTouchInactivityTimeout = 0.12;
@@ -379,7 +382,8 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         self.sessionMaxTouchCount = 1;
         self.twoFingerTapPossible = YES;
         self.pendingTwoFingerTap = NO;
-        self.cursorTouchStoppedMomentum = [TUCCursorUtilities sharedInstance].isMomentumScrolling;
+        // Read before this touch-down stops the inertia.
+        self.cursorTouchStoppedMomentum = [TUCCursorUtilities sharedInstance].momentumScrollSpeed >= kTapStopsMomentumSpeed;
         self.controlUnderCursorTouch = TUCControlUnderTouchOther;
         if (self.dragsControlsDirectly && isOnSurface) {
             [self lookUpControlAtLocation:[self convertScreenPointRelativeToAbsolute:point]];

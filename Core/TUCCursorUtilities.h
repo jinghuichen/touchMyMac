@@ -50,6 +50,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// Ends an ongoing scroll gesture without inertia, e.g. when the touch turns into another gesture.
 - (void)endScrollGesture;
 @property (readonly) BOOL isMomentumScrolling;
+/// Current inertia speed in points per second, 0 when inertia isn't running.
+@property (readonly) CGFloat momentumScrollSpeed;
 
 - (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2;
 - (void)stopMagnifying;
