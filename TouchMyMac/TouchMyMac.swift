@@ -998,7 +998,7 @@ extension TouchMyMac {
 
         case \.isSmallTargetAssistEnabled:
             return(L("Small Target Assist"),
-                   L("A finger that lands a little beside a divider or a window's edge or corner still grabs it, and the top of a window drags it in apps that don't report a title bar. In Mission Control, desktops show their close buttons while your finger is on them."))
+                   L("A finger that lands a little beside a divider, a window's edge or corner, or a window's close, minimize or zoom button still gets it, and the top of a window drags it in apps that don't report a title bar. In Mission Control, desktops show their close buttons while your finger is on them."))
 
         case \.isThreeFingerSwipeSpacesEnabled:
             return(L("Three-Finger Swipe Left / Right"),

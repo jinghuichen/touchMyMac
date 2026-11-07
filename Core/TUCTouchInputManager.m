@@ -35,6 +35,8 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 @property NSInteger controlLookupSession; // bumped per touch, so a late answer can't apply to the next touch
 @property CGPoint controlPressLocation; // where a control drag presses (global), e.g. snapped onto a divider
 @property BOOL fingerOnDesktopBar; // on Mission Control's row of desktops, whose close buttons need Option to show
+@property BOOL hasWindowButtonTapLocation; // the finger landed beside a window's close, minimize or zoom button
+@property CGPoint windowButtonTapLocation; // that button's centre (global), where a tap clicks instead
 @property BOOL holdingOptionForDesktopBar;
 @property (strong) NSDate *optionDownDate;
 @property TUCCursorAction lastPerformedAction;
@@ -108,9 +110,11 @@ static const CGFloat kTitleBarBandPoints = 40; // the top of a window that drags
 static const CGFloat kWindowEdgeInsidePoints = 4; // a finger this far inside a window's edge resizes it (macOS itself: 3)
 static const CGFloat kWindowCornerInsidePoints = 14; // near both edges this far inside, the corner resizes it
 static const NSTimeInterval kDesktopCloseButtonsAppearTime = 0.15; // Option shows Mission Control's close buttons, fading in
+static const CGFloat kWindowButtonReachMM = 4; // a tap this close to a window's close, minimize or zoom button clicks it
 
 static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReach, CGFloat titleBarHeight, CGPoint *pressLocation);
 static BOOL TUCIsOnMissionControlDesktopBar(CGPoint location);
+static BOOL TUCFindNearbyWindowButton(CGPoint location, CGFloat reach, CGPoint *buttonLocation);
 static void TUCPostOptionKey(bool down);
 // Inertia slower than this (points per second, under ~1.3 points per 60Hz frame) looks stopped,
 // so a tap then is a click. Faster, the tap only stops the scroll, like on iPad.
@@ -434,6 +438,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         self.controlUnderCursorTouch = TUCControlUnderTouchOther;
         [self releaseOptionForDesktopBar];
         self.fingerOnDesktopBar = NO;
+        self.hasWindowButtonTapLocation = NO;
         if (isOnSurface) {
             [self lookUpControlAtLocation:[self convertScreenPointRelativeToAbsolute:point]];
         }
@@ -750,9 +755,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     BOOL assists = self.assistsSmallTargets;
     CGFloat splitterReach = assists ? kSplitterReachMM * [[self touchscreen] pixelsPerMM] : 0;
     CGFloat titleBarHeight = assists ? kTitleBarBandPoints : 0;
+    CGFloat windowButtonReach = assists ? kWindowButtonReachMM * [[self touchscreen] pixelsPerMM] : 0;
     __weak typeof(self) weakSelf = self;
     dispatch_async(queue, ^{
         CGPoint pressLocation = location;
+        CGPoint buttonLocation = location;
+        BOOL nearWindowButton = windowButtonReach > 0 && TUCFindNearbyWindowButton(location, windowButtonReach, &buttonLocation);
         BOOL draggable = TUCDraggableControlAtLocation(location, splitterReach, titleBarHeight, &pressLocation);
         BOOL onDesktopBar = assists && draggable && TUCIsOnMissionControlDesktopBar(location);
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -761,6 +769,8 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
                 strongSelf.controlUnderCursorTouch = draggable ? TUCControlUnderTouchDraggable : TUCControlUnderTouchOther;
                 strongSelf.controlPressLocation = pressLocation;
                 strongSelf.fingerOnDesktopBar = onDesktopBar;
+                strongSelf.hasWindowButtonTapLocation = nearWindowButton;
+                strongSelf.windowButtonTapLocation = buttonLocation;
                 if (onDesktopBar && strongSelf.cursorTouch != nil) {
                     [strongSelf holdOptionForDesktopBar];
                 }
@@ -1069,6 +1079,133 @@ static BOOL TUCProbeForSplitter(AXUIElementRef systemWide, CGPoint location, CGF
     return NO;
 }
 
+/// The Accessibility window for a window from CGWindowListCopyWindowInfo, matched by owner and frame. Retained.
+static AXUIElementRef TUCCopyAXWindowForWindowInfo(NSDictionary *info, CGRect frame) {
+    pid_t pid = [info[(__bridge NSString *)kCGWindowOwnerPID] intValue];
+    AXUIElementRef app = AXUIElementCreateApplication(pid);
+    AXUIElementSetMessagingTimeout(app, 0.05);
+    AXUIElementRef match = NULL;
+    CFTypeRef axWindows = NULL;
+    if (AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &axWindows) == kAXErrorSuccess && axWindows != NULL) {
+        if (CFGetTypeID(axWindows) == CFArrayGetTypeID()) {
+            for (id candidate in (__bridge NSArray *)axWindows) {
+                CGRect axFrame = TUCCopyFrame((__bridge AXUIElementRef)candidate);
+                if (!CGRectIsNull(axFrame) && fabs(axFrame.origin.x - frame.origin.x) <= 1 && fabs(axFrame.origin.y - frame.origin.y) <= 1
+                    && fabs(axFrame.size.width - frame.size.width) <= 1 && fabs(axFrame.size.height - frame.size.height) <= 1) {
+                    match = (AXUIElementRef)CFRetain((__bridge CFTypeRef)candidate);
+                    break;
+                }
+            }
+        }
+        CFRelease(axWindows);
+    }
+    CFRelease(app);
+    return match;
+}
+
+/// Whether the element under `location` is something clickable other than a window's own buttons.
+static BOOL TUCIsOtherControlAtLocation(CGPoint location) {
+    static AXUIElementRef systemWide;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        systemWide = AXUIElementCreateSystemWide();
+        AXUIElementSetMessagingTimeout(systemWide, 0.05);
+    });
+    AXUIElementRef element = NULL;
+    if (AXUIElementCopyElementAtPosition(systemWide, location.x, location.y, &element) != kAXErrorSuccess || element == NULL) {
+        return NO;
+    }
+    BOOL other = NO;
+    CFTypeRef subrole = NULL;
+    BOOL isWindowButton = NO;
+    if (AXUIElementCopyAttributeValue(element, kAXSubroleAttribute, &subrole) == kAXErrorSuccess && subrole != NULL) {
+        if (CFGetTypeID(subrole) == CFStringGetTypeID()) {
+            NSString *name = (__bridge NSString *)subrole;
+            isWindowButton = [name isEqualToString:(__bridge NSString *)kAXCloseButtonSubrole]
+                || [name isEqualToString:(__bridge NSString *)kAXMinimizeButtonSubrole]
+                || [name isEqualToString:(__bridge NSString *)kAXZoomButtonSubrole]
+                || [name isEqualToString:(__bridge NSString *)kAXFullScreenButtonSubrole];
+        }
+        CFRelease(subrole);
+    }
+    if (!isWindowButton) {
+        CFArrayRef actions = NULL;
+        if (AXUIElementCopyActionNames(element, &actions) == kAXErrorSuccess && actions != NULL) {
+            other = CFArrayContainsValue(actions, CFRangeMake(0, CFArrayGetCount(actions)), kAXPressAction);
+            CFRelease(actions);
+        }
+    }
+    CFRelease(element);
+    return other;
+}
+
+/**
+ A window's close, minimize and zoom buttons are about 14 points across, smaller than a fingertip
+ lands. If `location` is within `reach` points of one of the frontmost nearby window's buttons,
+ `buttonLocation` is the centre of the nearest one, so a tap there clicks it.
+ */
+static BOOL TUCFindNearbyWindowButton(CGPoint location, CGFloat reach, CGPoint *buttonLocation) {
+    CFArrayRef windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+    if (windows == NULL) {
+        return NO;
+    }
+    BOOL found = NO;
+    for (NSDictionary *info in (__bridge NSArray *)windows) {
+        if ([info[(__bridge NSString *)kCGWindowLayer] integerValue] != 0
+            || [info[(__bridge NSString *)kCGWindowAlpha] doubleValue] <= 0) {
+            continue;
+        }
+        CGRect frame;
+        if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(__bridge NSString *)kCGWindowBounds], &frame)
+            || !CGRectContainsPoint(CGRectInset(frame, -reach, -reach), location)) {
+            continue;
+        }
+        // The frontmost window that close to the finger decides. Its buttons sit in its top-left
+        // corner, so skip the Accessibility calls anywhere else.
+        if (location.y - CGRectGetMinY(frame) > 60 || location.x - CGRectGetMinX(frame) > 120) {
+            break;
+        }
+        if (TUCIsOtherControlAtLocation(location)) {
+            break; // the finger is on a control of its own, such as a toolbar button beside them
+        }
+        AXUIElementRef axWindow = TUCCopyAXWindowForWindowInfo(info, frame);
+        if (axWindow == NULL) {
+            break;
+        }
+        CGFloat bestDistance = reach;
+        const CFStringRef attributes[] = {kAXCloseButtonAttribute, kAXMinimizeButtonAttribute, kAXZoomButtonAttribute};
+        for (int i = 0; i < 3; i++) {
+            CFTypeRef button = NULL;
+            if (AXUIElementCopyAttributeValue(axWindow, attributes[i], &button) != kAXErrorSuccess || button == NULL) {
+                continue;
+            }
+            if (CFGetTypeID(button) == AXUIElementGetTypeID()) {
+                CGRect buttonFrame = TUCCopyFrame((AXUIElementRef)button);
+                Boolean enabled = true;
+                CFTypeRef enabledValue = NULL;
+                if (AXUIElementCopyAttributeValue((AXUIElementRef)button, kAXEnabledAttribute, &enabledValue) == kAXErrorSuccess && enabledValue != NULL) {
+                    enabled = CFGetTypeID(enabledValue) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)enabledValue);
+                    CFRelease(enabledValue);
+                }
+                if (enabled && !CGRectIsNull(buttonFrame) && CGRectGetWidth(buttonFrame) > 0) {
+                    CGPoint nearest = TUCClampToRect(location, buttonFrame);
+                    CGFloat distance = hypot(nearest.x - location.x, nearest.y - location.y);
+                    if (distance <= bestDistance) {
+                        bestDistance = distance;
+                        *buttonLocation = CGPointMake(CGRectGetMidX(buttonFrame), CGRectGetMidY(buttonFrame));
+                        found = YES;
+                    }
+                }
+            }
+            CFRelease(button);
+        }
+        CFRelease(axWindow);
+        break;
+    }
+    CFRelease(windows);
+    return found;
+}
+
 /**
  Window edges resize only within about 3 points of the edge line, and corners only close to the
  rounded corner: much less than a fingertip's accuracy. If `location` is within `reach` points
@@ -1103,35 +1240,20 @@ static BOOL TUCFindNearbyWindowEdge(CGPoint location, CGFloat reach, CGFloat ins
             break; // on the window's content
         }
         // Only a window that can be resized and isn't full screen.
-        pid_t pid = [info[(__bridge NSString *)kCGWindowOwnerPID] intValue];
-        AXUIElementRef app = AXUIElementCreateApplication(pid);
-        AXUIElementSetMessagingTimeout(app, 0.05);
-        CFTypeRef axWindows = NULL;
         BOOL resizable = NO;
-        if (AXUIElementCopyAttributeValue(app, kAXWindowsAttribute, &axWindows) == kAXErrorSuccess && axWindows != NULL) {
-            if (CFGetTypeID(axWindows) == CFArrayGetTypeID()) {
-                for (id candidate in (__bridge NSArray *)axWindows) {
-                    AXUIElementRef axWindow = (__bridge AXUIElementRef)candidate;
-                    CGRect axFrame = TUCCopyFrame(axWindow);
-                    if (CGRectIsNull(axFrame) || fabs(axFrame.origin.x - frame.origin.x) > 1 || fabs(axFrame.origin.y - frame.origin.y) > 1
-                        || fabs(axFrame.size.width - frame.size.width) > 1 || fabs(axFrame.size.height - frame.size.height) > 1) {
-                        continue;
-                    }
-                    Boolean settable = false;
-                    AXUIElementIsAttributeSettable(axWindow, kAXSizeAttribute, &settable);
-                    CFTypeRef fullScreen = NULL;
-                    BOOL isFullScreen = NO;
-                    if (AXUIElementCopyAttributeValue(axWindow, CFSTR("AXFullScreen"), &fullScreen) == kAXErrorSuccess && fullScreen != NULL) {
-                        isFullScreen = CFGetTypeID(fullScreen) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)fullScreen);
-                        CFRelease(fullScreen);
-                    }
-                    resizable = settable && !isFullScreen;
-                    break;
-                }
+        AXUIElementRef axWindow = TUCCopyAXWindowForWindowInfo(info, frame);
+        if (axWindow != NULL) {
+            Boolean settable = false;
+            AXUIElementIsAttributeSettable(axWindow, kAXSizeAttribute, &settable);
+            CFTypeRef fullScreen = NULL;
+            BOOL isFullScreen = NO;
+            if (AXUIElementCopyAttributeValue(axWindow, CFSTR("AXFullScreen"), &fullScreen) == kAXErrorSuccess && fullScreen != NULL) {
+                isFullScreen = CFGetTypeID(fullScreen) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)fullScreen);
+                CFRelease(fullScreen);
             }
-            CFRelease(axWindows);
+            resizable = settable && !isFullScreen;
+            CFRelease(axWindow);
         }
-        CFRelease(app);
         if (!resizable) {
             break;
         }
@@ -1568,6 +1690,9 @@ static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReac
     // A tap clicks where the finger landed: a finger drifts a little as it flattens and lifts.
     CGPoint screenLocation = [self convertScreenPointRelativeToAbsolute:
                               gesture == TUCCursorGestureTap ? self.cursorTouchStartLocation : touch.location];
+    if (gesture == TUCCursorGestureTap && self.hasWindowButtonTapLocation) {
+        screenLocation = self.windowButtonTapLocation; // the close, minimize or zoom button it landed beside
+    }
     CGPoint location2ndFinger = [self convertScreenPointRelativeToAbsolute:self.gestureAdditionalTouch.location];
     
     TUCCursorUtilities *utils = [TUCCursorUtilities sharedInstance];
