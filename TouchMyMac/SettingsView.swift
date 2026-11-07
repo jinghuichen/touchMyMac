@@ -326,9 +326,13 @@ struct SettingsView: View {
 
     private var gesturesPane: some View {
         VStack(alignment: .leading, spacing: 18) {
-            SettingsGroup(title: "Gesture Toggles") {
+            SettingsGroup(title: "Dragging") {
                 settingToggleRow(labels: model.uiLabels(for: \.isControlDragEnabled), isOn: $model.isControlDragEnabled)
                 sectionDivider
+                settingToggleRow(labels: model.uiLabels(for: \.isSmallTargetAssistEnabled), isOn: $model.isSmallTargetAssistEnabled)
+            }
+
+            SettingsGroup(title: "Gesture Toggles") {
                 settingToggleRow(labels: model.uiLabels(for: \.isSecondaryClickEnabled), isOn: $model.isSecondaryClickEnabled)
                 sectionDivider
                 settingToggleRow(labels: model.uiLabels(for: \.isMagnificationEnabled), isOn: $model.isMagnificationEnabled)

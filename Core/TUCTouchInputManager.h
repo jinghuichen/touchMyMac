@@ -107,6 +107,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property BOOL dragsControlsDirectly;
 
 /**
+ Helps with targets smaller than a fingertip: a finger near a divider or a window's edge or corner
+ grabs it, the top of a window drags it in apps that don't report a title bar, and Mission Control's
+ desktop close buttons are shown (by holding Option) while a finger is on the row of desktops.
+ Default value is YES.
+ */
+@property BOOL assistsSmallTargets;
+
+/**
  Enables/disables four-finger swipe up recognition for the floating keyboard.
  Default value is YES.
  */

@@ -107,6 +107,7 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var isThreeFingerSwipeEnabled = true
     @Published var isThreeFingerSwipeSpacesEnabled = true
     @Published var isControlDragEnabled = true
+    @Published var isSmallTargetAssistEnabled = true
     @Published var isFourFingerSwipeUpKeyboardEnabled = true
     @Published var fiveFingerHoldShortcutSpec: String = "fn"
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
@@ -645,6 +646,7 @@ extension TouchMyMac {
             "isThreeFingerSwipeEnabled" : true,
             "isThreeFingerSwipeSpacesEnabled" : true,
             "isControlDragEnabled" : true,
+            "isSmallTargetAssistEnabled" : true,
             "isFourFingerSwipeUpKeyboardEnabled" : true,
             "fiveFingerHoldShortcutSpec" : "fn",
             "fourFingerSwipeLeftSequenceSpec" : "cmd+a, delete",
@@ -677,6 +679,7 @@ extension TouchMyMac {
             $isThreeFingerSwipeEnabled.assign(to: \.threeFingerSwipeEnabled, on: touchManager),
             $isThreeFingerSwipeSpacesEnabled.assign(to: \.threeFingerSwipeSpacesEnabled, on: touchManager),
             $isControlDragEnabled.assign(to: \.dragsControlsDirectly, on: touchManager),
+            $isSmallTargetAssistEnabled.assign(to: \.assistsSmallTargets, on: touchManager),
             $isFourFingerSwipeUpKeyboardEnabled.assign(to: \.fourFingerSwipeUpKeyboardEnabled, on: touchManager),
             $fiveFingerHoldShortcutSpec.assign(to: \.fiveFingerHoldShortcutSpec, on: touchManager),
             $fourFingerSwipeLeftSequenceSpec.assign(to: \.fourFingerSwipeLeftSequenceSpec, on: touchManager),
@@ -695,6 +698,7 @@ extension TouchMyMac {
         isThreeFingerSwipeEnabled = defaults.bool(forKey: "isThreeFingerSwipeEnabled")
         isThreeFingerSwipeSpacesEnabled = defaults.bool(forKey: "isThreeFingerSwipeSpacesEnabled")
         isControlDragEnabled = defaults.bool(forKey: "isControlDragEnabled")
+        isSmallTargetAssistEnabled = defaults.object(forKey: "isSmallTargetAssistEnabled") as? Bool ?? true
         isFourFingerSwipeUpKeyboardEnabled = defaults.object(forKey: "isFourFingerSwipeUpKeyboardEnabled") as? Bool ?? true
         fiveFingerHoldShortcutSpec = defaults.string(forKey: "fiveFingerHoldShortcutSpec") ?? "fn"
         let savedFourFingerSequence = defaults.string(forKey: "fourFingerSwipeLeftSequenceSpec")
@@ -706,6 +710,7 @@ extension TouchMyMac {
         touchManager.threeFingerSwipeEnabled = isThreeFingerSwipeEnabled
         touchManager.threeFingerSwipeSpacesEnabled = isThreeFingerSwipeSpacesEnabled
         touchManager.dragsControlsDirectly = isControlDragEnabled
+        touchManager.assistsSmallTargets = isSmallTargetAssistEnabled
         touchManager.fourFingerSwipeUpKeyboardEnabled = isFourFingerSwipeUpKeyboardEnabled
         touchManager.fiveFingerHoldShortcutSpec = fiveFingerHoldShortcutSpec
         touchManager.fourFingerSwipeLeftSequenceSpec = fourFingerSwipeLeftSequenceSpec
@@ -738,6 +743,7 @@ extension TouchMyMac {
         defaults.set(isThreeFingerSwipeEnabled, forKey: "isThreeFingerSwipeEnabled")
         defaults.set(isThreeFingerSwipeSpacesEnabled, forKey: "isThreeFingerSwipeSpacesEnabled")
         defaults.set(isControlDragEnabled, forKey: "isControlDragEnabled")
+        defaults.set(isSmallTargetAssistEnabled, forKey: "isSmallTargetAssistEnabled")
         defaults.set(isFourFingerSwipeUpKeyboardEnabled, forKey: "isFourFingerSwipeUpKeyboardEnabled")
         defaults.set(fiveFingerHoldShortcutSpec, forKey: "fiveFingerHoldShortcutSpec")
         defaults.set(fourFingerSwipeLeftSequenceSpec, forKey: "fourFingerSwipeLeftSequenceSpec")
@@ -988,7 +994,11 @@ extension TouchMyMac {
 
         case \.isControlDragEnabled:
             return(L("Drag Controls Directly"),
-                   L("Sliders, scroll bars, dividers, window title bars and window edges follow your finger right away, even if your finger lands a little beside a divider or edge. Elsewhere, dragging scrolls unless you hold still first."))
+                   L("Sliders, scroll bars, dividers, window title bars and windows in Mission Control follow your finger right away. Elsewhere, dragging scrolls unless you hold still first."))
+
+        case \.isSmallTargetAssistEnabled:
+            return(L("Small Target Assist"),
+                   L("A finger that lands a little beside a divider or a window's edge or corner still grabs it, and the top of a window drags it in apps that don't report a title bar. In Mission Control, desktops show their close buttons while your finger is on them."))
 
         case \.isThreeFingerSwipeSpacesEnabled:
             return(L("Three-Finger Swipe Left / Right"),

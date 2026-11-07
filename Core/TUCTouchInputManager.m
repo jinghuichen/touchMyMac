@@ -747,13 +747,14 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     NSInteger session = ++self.controlLookupSession;
     self.controlUnderCursorTouch = TUCControlUnderTouchPending;
     self.controlPressLocation = location;
-    CGFloat pointsPerMM = [[self touchscreen] pixelsPerMM];
-    CGFloat splitterReach = kSplitterReachMM * pointsPerMM;
+    BOOL assists = self.assistsSmallTargets;
+    CGFloat splitterReach = assists ? kSplitterReachMM * [[self touchscreen] pixelsPerMM] : 0;
+    CGFloat titleBarHeight = assists ? kTitleBarBandPoints : 0;
     __weak typeof(self) weakSelf = self;
     dispatch_async(queue, ^{
         CGPoint pressLocation = location;
-        BOOL draggable = TUCDraggableControlAtLocation(location, splitterReach, kTitleBarBandPoints, &pressLocation);
-        BOOL onDesktopBar = draggable && TUCIsOnMissionControlDesktopBar(location);
+        BOOL draggable = TUCDraggableControlAtLocation(location, splitterReach, titleBarHeight, &pressLocation);
+        BOOL onDesktopBar = assists && draggable && TUCIsOnMissionControlDesktopBar(location);
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) strongSelf = weakSelf;
             if (strongSelf.controlLookupSession == session && strongSelf.controlUnderCursorTouch == TUCControlUnderTouchPending) {
@@ -1941,6 +1942,7 @@ static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReac
         
         self.doubleClickTolerance = 5;
         self.holdDuration = 0.4;
+        self.assistsSmallTargets = YES;
         self.errorResistance = 0;
         
         self.ignoreOriginTouches = NO;
