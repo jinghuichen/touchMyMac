@@ -207,7 +207,7 @@ Raise Error Resistance and keep Ignore Origin Touches on. The Diagnostics pane s
 <details>
 <summary><b>How do I switch the app between English and Chinese?</b></summary>
 
-TouchMyMac follows your system language: Simplified Chinese if it comes first in System Settings → General → Language & Region, English otherwise. To use another language just for TouchMyMac, add it under **Applications** on that page (macOS 13 or later) and reopen the app.
+Pick it under **Settings → General → Language** and click Restart Now. The default, System Default, follows your system: Simplified Chinese if it comes first in System Settings → General → Language & Region, English otherwise.
 </details>
 
 ## 🛠 Build from source

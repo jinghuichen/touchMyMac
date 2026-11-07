@@ -14,6 +14,41 @@ import IOKit.hid
 func L(_ key: String) -> String {
     NSLocalizedString(key, comment: "")
 }
+
+/// The language picked in Settings. Stored as this app's own AppleLanguages, which macOS reads at launch.
+enum AppLanguage: String, CaseIterable, Identifiable {
+    case system
+    case english = "en"
+    case simplifiedChinese = "zh-Hans"
+
+    var id: String { rawValue }
+
+    /// Language names stay in their own language, so they can be found whatever the UI language is.
+    var title: String {
+        switch self {
+        case .system: return L("System Default")
+        case .english: return "English"
+        case .simplifiedChinese: return "简体中文"
+        }
+    }
+
+    static var saved: AppLanguage {
+        guard let domain = Bundle.main.bundleIdentifier,
+              let languages = UserDefaults.standard.persistentDomain(forName: domain)?["AppleLanguages"] as? [String],
+              let first = languages.first else {
+            return .system
+        }
+        return first.hasPrefix("zh") ? .simplifiedChinese : (first.hasPrefix("en") ? .english : .system)
+    }
+
+    func save() {
+        if self == .system {
+            UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+        } else {
+            UserDefaults.standard.set([rawValue], forKey: "AppleLanguages")
+        }
+    }
+}
 import ServiceManagement
 import TouchUpCore
 
@@ -77,6 +112,10 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
 
     @Published var isScrollInertiaEnabled = true
+
+    /// The language picked in Settings, and the one this launch runs in; they differ until a restart.
+    @Published private(set) var appLanguage = AppLanguage.saved
+    let launchLanguage = AppLanguage.saved
     @Published var isCursorHiddenWhileScrolling = true
     @Published var scrollSpeedMultiplier: CGFloat = 1.0
     @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.92
@@ -1018,6 +1057,29 @@ extension TUCScreen: Identifiable {
 
 // MARK: - Open at Login
 extension TouchMyMac {
+
+    var languageNeedsRestart: Bool {
+        appLanguage != launchLanguage
+    }
+
+    func setAppLanguage(_ language: AppLanguage) {
+        language.save()
+        appLanguage = language
+    }
+
+    /// Quits and opens the app again, so a new language takes effect.
+    func relaunch() {
+        let path = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "sleep 0.5; /usr/bin/open '\(path)'"]
+        do {
+            try task.run()
+            NSApp.terminate(nil)
+        } catch {
+            addDiagnosticsEvent("Relaunch failed: \(error.localizedDescription)")
+        }
+    }
 
     static var loginItemTurnedOffNote: String {
         L("Turned off in System Settings → General → Login Items. Allow TouchMyMac there.")

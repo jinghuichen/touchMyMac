@@ -104,6 +104,14 @@ struct SettingsView: View {
         }
     }
 
+    private var languageBinding: Binding<AppLanguage> {
+        Binding {
+            model.appLanguage
+        } set: { language in
+            model.setAppLanguage(language)
+        }
+    }
+
     private var opensAtLoginBinding: Binding<Bool> {
         Binding {
             model.opensAtLogin
@@ -243,6 +251,32 @@ struct SettingsView: View {
                         }
                         .labelsHidden()
                         .frame(maxWidth: 320, alignment: .leading)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+
+            SettingsGroup(title: "Language") {
+                VStack(alignment: .leading, spacing: 8) {
+                    SettingText(labels: (L("App Language"), L("The language of TouchMyMac's menus and settings.")))
+                    Picker("", selection: languageBinding) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.title).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 320, alignment: .leading)
+
+                    if model.languageNeedsRestart {
+                        HStack(spacing: 10) {
+                            Text(L("Restart TouchMyMac to use the new language."))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button(L("Restart Now")) {
+                                model.relaunch()
+                            }
+                            .controlSize(.small)
+                        }
                     }
                 }
                 .padding(.vertical, 8)

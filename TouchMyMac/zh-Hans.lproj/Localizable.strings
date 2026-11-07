@@ -153,3 +153,11 @@
 "Mini Keyboard" = "迷你键盘";
 "Hide Keyboard" = "隐藏键盘";
 "Switch Input Source" = "切换输入法";
+
+/* MARK: - Language */
+"Language" = "语言";
+"App Language" = "App 语言";
+"The language of TouchMyMac's menus and settings." = "TouchMyMac 菜单和设置使用的语言。";
+"System Default" = "跟随系统";
+"Restart TouchMyMac to use the new language." = "重新启动 TouchMyMac 后生效。";
+"Restart Now" = "立即重新启动";
