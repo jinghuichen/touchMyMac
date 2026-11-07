@@ -44,12 +44,13 @@ In October 2026 Apple announced the first Mac with a touchscreen: a MacBook Pro 
 
 | | |
 |---|---|
-| 👆 **Direct touch** | Tap to click, drag to scroll, hold and move to drag, two-finger tap for a secondary click. Sliders, scroll bars and title bars follow your finger right away. |
+| 👆 **Direct touch** | Tap to click, drag to scroll, hold to press and drag (a dot shows when the press takes), two-finger tap for a secondary click. Taps, scrolls and long presses are told apart the way Android does it, and fast double and triple taps register. Sliders, scroll bars and title bars follow your finger right away. |
 | 🌀 **Trackpad-like scrolling** | Scrolling follows the display's refresh rate, filters out touch jitter and hands over to inertia without a pause. The pointer hides while you scroll. |
-| 🖐 **Multi-finger gestures** | Mission Control, switching desktops, showing or hiding the keyboard, and configurable shortcuts on four- and five-finger gestures. |
+| 🖐 **Multi-finger gestures** | Pinch to zoom around your fingers, Mission Control, switching desktops, showing or hiding the keyboard, and configurable shortcuts on four- and five-finger gestures. |
 | ⌨️ **Floating keyboard** | A full Mac layout whose keys fire as you touch them, so fast, overlapping typing doesn't drop letters. Switches input sources and shrinks to a mini keyboard. |
 | 🔌 **Works with more screens** | Switches touchscreens made for Windows out of single-touch mouse mode, and opens at login so the screen works right away. |
 | 🩺 **Status and diagnostics** | The menu bar menu shows whether Accessibility is allowed and which display your touches land on. Settings adds touch counters and a gesture stream to tune noisy panels. |
+| 🌐 **English and 简体中文** | The interface follows your system language, or pick one under Settings → General → Language. |
 | 🔒 **User space only** | No kernel extension or driver install: one app, one Accessibility permission (some screens also need Input Monitoring). |
 
 ## 🖐 Gestures
@@ -63,10 +64,10 @@ In October 2026 Apple announced the first Mac with a touchscreen: a MacBook Pro 
 |---|---|
 | Tap | Click (tap twice to double-click) |
 | Drag with one finger | Scroll, with inertia when you flick |
-| Hold briefly, then move | Drag (select text, move windows and files) |
+| Hold still for 0.4 s, then move | Drag (select text, move windows and files); a dot under the finger shows the press |
 | Drag a slider, scroll bar, splitter or title bar | Moves it right away, no hold needed |
 | Tap with two fingers | Secondary click, like on a Mac trackpad |
-| Pinch with two fingers | Zoom |
+| Pinch with two fingers | Zoom around your fingers (Pinch Zoom Speed sets how far) |
 | Swipe up with three fingers | Mission Control |
 | Swipe left / right with three fingers | Move between desktops and full-screen apps |
 | Swipe up / down with four fingers | Show / hide the floating keyboard (also over the keyboard) |
@@ -96,8 +97,19 @@ Synthesized scroll events are easy to get wrong, so TouchMyMac borrows from how 
 - **One step per display frame.** Touch reports (often around 120 Hz) don't line up with display frames, so the finger's path is resampled at each frame instead of posting every report.
 - **Jitter filtering.** A One Euro filter smooths heavily at low speed, where touch noise is as large as the movement itself, and barely at high speed, where lag would be noticeable.
 - **Release velocity like Android.** A quadratic fit over the last 100 ms, and no fling if the finger had stopped for 40 ms.
-- **Continuous handover to inertia.** Inertia starts at the release velocity. If a screen confirms liftoff late, the content keeps gliding instead of pausing.
+- **Continuous handover to inertia.** Inertia starts at the release velocity. If reports pause for a moment, the content keeps gliding instead of stopping.
+- **Inertia like Android's fling.** The glide distance and duration come from the release speed and Android's scroll friction, so the content stops at a definite point instead of crawling on.
 - **Trackpad scroll phases**, so apps treat the events like trackpad scrolling.
+
+## 👆 How taps work
+
+One finger is told apart the way Android's GestureDetector does it:
+
+- **A possible tap** until the finger moves 6 mm from where it landed (then it scrolls) or stays inside that for the Hold Duration, 0.4 s (then the mouse button goes down where it landed, so moving drags). Lifting a possible tap clicks where the finger landed, however long it took.
+- **The slop is wider than on a phone** (Android uses about 1.3 mm) because fingers flatten and roll as they land, which moved the contact point up to 3 mm on the panels we measured.
+- **Liftoffs come from the screen.** Many screens report the liftoff without coordinates; TouchMyMac still ends the touch right away, so taps are quick and fast double taps aren't merged into one.
+- **Clicks last 40 ms** between button down and up, like a real mouse, so controls show their pressed state and don't drop clicks.
+- **Two fingers** pinch once their distance changes by 8 mm, or scroll once the point between them moves 6 mm, whichever comes first. The zoom follows the ratio of finger distances, around the point between them.
 
 ## 📦 Install
 
