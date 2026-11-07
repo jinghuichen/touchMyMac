@@ -60,7 +60,11 @@
 @property (strong, nullable) id frameDriver; // CADisplayLink, or NSTimer before macOS 14
 
 @property BOOL isMagnifying;
-@property CGFloat lastPinchDistance;
+@property CGFloat pinchTargetSpan;   // latest finger distance
+@property CGFloat pinchFilteredSpan; // smoothed toward the target each frame
+@property CGFloat pinchPostedSpan;   // the distance the zoom posted so far corresponds to
+@property CFTimeInterval pinchLastFrameTime;
+@property CGPoint pinchCenter;       // between the fingers; apps zoom around the event location
 
 @property BOOL isHoldingShortcut;
 @property (copy) NSArray<NSDictionary<NSString *, NSNumber *> *> *heldModifierDescriptors;
@@ -111,6 +115,7 @@ static const useconds_t kShortcutSequenceStepDelayMicroseconds = 30000;
             sharedInstance.reportInterval = kDefaultReportInterval;
             sharedInstance.momentumScrollVelocity = CGPointZero;
             sharedInstance.momentumPointsPerMM = 4.0;
+            sharedInstance.pinchZoomExponent = 1.0;
             sharedInstance.momentumScrollEnabled = YES;
             sharedInstance.momentumDecelerationPerFrame = kDefaultMomentumDecelerationPerFrame;
             sharedInstance.momentumVelocityMultiplier = 1.0;
@@ -965,11 +970,19 @@ static const double kFlingGravity = 9.80665;                // SensorManager.GRA
 }
 
 - (void)frameTick:(id)sender {
+    BOOL running = NO;
     if (self.isScrollGestureActive) {
         [self advanceScrollOutput];
+        running = YES;
     } else if (self.isMomentumActive) {
         [self advanceMomentum];
-    } else {
+        running = YES;
+    }
+    if (self.isMagnifying) {
+        [self advancePinchOutput];
+        running = YES;
+    }
+    if (!running) {
         [self.frameDriver invalidate];
         self.frameDriver = nil;
     }
@@ -996,8 +1009,9 @@ static const double kFlingGravity = 9.80665;                // SensorManager.GRA
         return;
     }
     
-    // start with a valid mouse event, as it has a valid timestamp
-    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, [self currentCursorLocation], kCGMouseButtonLeft);
+    // start with a valid mouse event, as it has a valid timestamp; apps zoom around its location
+    CGPoint location = self.isMagnifying ? self.pinchCenter : [self currentCursorLocation];
+    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, location, kCGMouseButtonLeft);
     
     CGEventSetType(event, 29); // type gesture
     CGEventSetFlags(event, 0);
@@ -1031,34 +1045,59 @@ static const double kFlingGravity = 9.80665;                // SensorManager.GRA
 }
 
 
-- (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2 {
+/*
+ Like Android's ScaleGestureDetector, the zoom follows the ratio of finger distances, so content scales
+ exactly with the fingers: spreading them to twice the distance doubles the size. macOS apps apply each
+ event's magnification as a factor of (1 + magnification), so each frame posts span / postedSpan - 1.
+ The distance is smoothed over ~12 ms and posted once per display frame, so finger jitter and the touch
+ report rate don't show up as uneven zooming. Each event is anchored at the point between the fingers
+ as it is now, not where the pinch began, so the content under the fingers stays under them.
+ */
+static const CFTimeInterval kPinchSmoothingTime = 0.012;
+
+- (void)updatePinchSpan:(CGFloat)span center:(CGPoint)center {
     [self postPendingClickUp];
     [self stopDraggingCursor];
-    
-    NSTouchPhase phase = NSTouchPhaseMoved;
-    
-    CGFloat dx = r1.x - r2.x;
-    CGFloat dy = r1.y - r2.y;
-    
-    CGFloat distance = sqrt( pow(dx, 2) + pow(dy, 2) );
-    CGFloat delta = distance - self.lastPinchDistance;
-    
-    self.lastPinchDistance = distance;
-    
-    if (!self.isMagnifying) {
-        CGPoint middle = CGPointMake(0.5f * (p1.x + p2.x), 0.5f * (p1.y + p2.y));
-        [self moveCursorTo:middle];
-        phase = NSTouchPhaseBegan;
-        delta = 0;
-        self.isMagnifying = YES;
+    if (span <= 0) {
+        return;
     }
-    
-    [self magnify:delta * 4 phase:phase];
+    self.pinchTargetSpan = span;
+    self.pinchCenter = center;
+    if (!self.isMagnifying) {
+        [self moveCursorTo:center]; // zooming apps zoom around the pointer
+        self.isMagnifying = YES;
+        self.pinchFilteredSpan = span;
+        self.pinchPostedSpan = span;
+        self.pinchLastFrameTime = TUCNowSeconds();
+        [self magnify:0 phase:NSTouchPhaseBegan];
+        [self startFrameDriver];
+    }
 }
 
+- (void)advancePinchOutput {
+    CFTimeInterval now = TUCNowSeconds();
+    CFTimeInterval dt = now - self.pinchLastFrameTime;
+    self.pinchLastFrameTime = now;
+    CGFloat blend = (CGFloat)(1.0 - exp(-MAX(dt, 0.0) / kPinchSmoothingTime));
+    self.pinchFilteredSpan += (self.pinchTargetSpan - self.pinchFilteredSpan) * blend;
+    [self postPinchTowardSpan:self.pinchFilteredSpan];
+}
+
+- (void)postPinchTowardSpan:(CGFloat)span {
+    // Pinch Zoom Speed 1 zooms exactly with the fingers; higher values raise the ratio to that power.
+    CGFloat exponent = MAX(self.pinchZoomExponent, 0.1f);
+    CGFloat magnification = (CGFloat)pow(span / self.pinchPostedSpan, exponent) - 1;
+    if (fabs(magnification) < 0.0005) {
+        return;
+    }
+    [self magnify:magnification phase:NSTouchPhaseMoved];
+    self.pinchPostedSpan = span;
+}
 
 - (void)stopMagnifying {
     if (self.isMagnifying) {
+        // Post what the smoothing still owed, so the final size matches the fingers.
+        [self postPinchTowardSpan:self.pinchTargetSpan];
         self.isMagnifying = NO;
         [self magnify:0 phase:NSTouchPhaseEnded];
     }

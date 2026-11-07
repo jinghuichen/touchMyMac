@@ -55,7 +55,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// Current inertia speed in points per second, 0 when inertia isn't running.
 @property (readonly) CGFloat momentumScrollSpeed;
 
-- (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2;
+/// How far a pinch zooms: the finger-distance ratio is raised to this power (1 = exactly with the fingers).
+@property (nonatomic) CGFloat pinchZoomExponent;
+
+/// Pinching: the distance between the two fingers (points) and the point between them. The zoom follows
+/// the ratio of distances, smoothed and posted once per display frame.
+- (void)updatePinchSpan:(CGFloat)span center:(CGPoint)center;
 - (void)stopMagnifying;
 
 - (void)beginHoldingShortcutSpec:(NSString *)shortcutSpec;

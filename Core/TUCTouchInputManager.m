@@ -95,6 +95,9 @@ static const CGFloat kStationaryThresholdMM = 0.1f;
  is wider than Android's 8 dp (about 1.3 mm on a phone). Deliberate swipes pass it within about 20 ms.
  */
 static const CGFloat kTapSlopMM = 6.0f;
+// Two fingers pinch once their distance changes this much (Android uses twice the touch slop). Both
+// fingers drift as they land, so their distance can wander up to about twice one finger's drift.
+static const CGFloat kPinchSpanSlopMM = 8.0f;
 static const NSTimeInterval kControlLookupWait = 0.08; // how long a moving finger waits for Accessibility's answer
 
 static BOOL TUCIsDraggableControlAtLocation(CGPoint location);
@@ -639,23 +642,31 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         // Keep reference in sync every frame to avoid stale pointer causing pinch latch.
         self.gestureAdditionalTouch = otherTouch;
 
-        // While both fingers rest where they landed this may still be a two-finger tap,
-        // so finger jitter must not start a pinch.
-        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone && !self.twoFingerTapPossible) {
-            CGPoint trajectoryA = [cursorTouch trajectorySign];
-            CGPoint trajectoryB = [otherTouch trajectorySign];
-
-            if (   !CGPointEqualToPoint(trajectoryA, CGPointZero)
-                && !CGPointEqualToPoint(trajectoryB, CGPointZero)
-                && !CGPointEqualToPoint(trajectoryA, trajectoryB)) {
-                self.identifiedMultitouchGesture = TUCCursorGesturePinch;
-            }
-        }
-        
         // other finger lifted, gesture ended
         if (!self.gestureAdditionalTouch.isActive) {
             self.gestureAdditionalTouch = nil;
             [self stopCurrentGesture];
+        }
+
+        // Like Android's ScaleGestureDetector: a pinch changes the distance between the fingers, a two-finger
+        // scroll moves the point between them. Whichever passes its slop first decides, and the choice stays.
+        // While both fingers rest where they landed this may still be a two-finger tap.
+        if (self.gestureAdditionalTouch != nil && self.identifiedMultitouchGesture == _TUCCursorGestureNone
+            && !self.twoFingerTapPossible && self.lastPerformedAction != TUCCursorActionScroll) {
+            CGFloat spanChangeMM = fabs([self distanceMMFromPoint:cursorTouch.location toPoint:otherTouch.location]
+                                        - [self distanceMMFromPoint:cursorTouch.initialLocation toPoint:otherTouch.initialLocation]);
+            CGPoint focus = CGPointMake((cursorTouch.location.x + otherTouch.location.x) / 2,
+                                        (cursorTouch.location.y + otherTouch.location.y) / 2);
+            CGPoint initialFocus = CGPointMake((cursorTouch.initialLocation.x + otherTouch.initialLocation.x) / 2,
+                                               (cursorTouch.initialLocation.y + otherTouch.initialLocation.y) / 2);
+            CGFloat focusMoveMM = [self distanceMMFromPoint:focus toPoint:initialFocus];
+
+            if (spanChangeMM > kPinchSpanSlopMM && spanChangeMM >= focusMoveMM
+                && [self actionForGesture:TUCCursorGesturePinch] != TUCCursorActionNone) {
+                self.identifiedMultitouchGesture = TUCCursorGesturePinch;
+            } else if (focusMoveMM <= kTapSlopMM) {
+                return; // neither yet
+            }
         }
         
         
@@ -1130,15 +1141,15 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
             
             break; }
             
-        case TUCCursorActionMagnify:
-            [utils magnifyLocationA:screenLocation
-                          locationB:location2ndFinger
-            relativeP1:self.cursorTouch.location relP2:self.gestureAdditionalTouch.location];
+        case TUCCursorActionMagnify: {
+            CGFloat span = (CGFloat)hypot(screenLocation.x - location2ndFinger.x, screenLocation.y - location2ndFinger.y);
+            CGPoint center = CGPointMake((screenLocation.x + location2ndFinger.x) / 2, (screenLocation.y + location2ndFinger.y) / 2);
+            [utils updatePinchSpan:span center:center];
             
             if (touch.phase == NSTouchPhaseEnded || self.gestureAdditionalTouch.phase == NSTouchPhaseEnded) {
                 [utils stopMagnifying];
             }
-            break;
+            break; }
 
         case TUCCursorActionMissionControl:
             [utils performMissionControl];
@@ -1421,6 +1432,7 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
         self.scrollInertiaDecelerationPerFrame = 0.92;
         self.scrollInertiaVelocityMultiplier = 1.0;
         self.scrollSpeedMultiplier = 1.0;
+        self.pinchZoomSpeed = 1.5;
         self.threeFingerSwipeEnabled = YES;
         self.threeFingerSwipeSpacesEnabled = YES;
         self.dragsControlsDirectly = YES;
@@ -1434,6 +1446,11 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
 - (void)setScrollInertiaEnabled:(BOOL)scrollInertiaEnabled {
     _scrollInertiaEnabled = scrollInertiaEnabled;
     [TUCCursorUtilities sharedInstance].momentumScrollEnabled = scrollInertiaEnabled;
+}
+
+- (void)setPinchZoomSpeed:(CGFloat)pinchZoomSpeed {
+    _pinchZoomSpeed = pinchZoomSpeed;
+    [TUCCursorUtilities sharedInstance].pinchZoomExponent = pinchZoomSpeed;
 }
 
 - (void)setHidesCursorWhileScrolling:(BOOL)hidesCursorWhileScrolling {

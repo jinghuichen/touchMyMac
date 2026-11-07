@@ -72,6 +72,14 @@ struct SettingsView: View {
         }
     }
 
+    private var pinchZoomSpeedBinding: Binding<Double> {
+        Binding {
+            Double(model.pinchZoomSpeed)
+        } set: { value in
+            model.pinchZoomSpeed = CGFloat(value)
+        }
+    }
+
     private var inertiaAmountBinding: Binding<Double> {
         Binding {
             Double(model.scrollInertiaVelocityMultiplier)
@@ -412,6 +420,20 @@ struct SettingsView: View {
                 )
             }
 
+            SettingsGroup(title: "Zoom") {
+                sliderRow(
+                    labels: model.uiLabels(for: \.pinchZoomSpeed),
+                    value: pinchZoomSpeedBinding,
+                    range: 1.0...3.0,
+                    step: 0.1,
+                    currentText: { String(format: L("Current %.1fx"), $0) },
+                    minText: "1.0x",
+                    maxText: "3.0x",
+                    disabled: !model.isMagnificationEnabled,
+                    disabledHint: "Turn on Magnification under Gestures to adjust this."
+                )
+            }
+
             SettingsGroup(title: "Reliability") {
                 sliderRow(
                     labels: model.uiLabels(for: \.errorResistance),
@@ -549,7 +571,8 @@ struct SettingsView: View {
         .padding(.vertical, 8)
     }
 
-    private func sliderRow(labels: (title: String, description: String), value: Binding<Double>, range: ClosedRange<Double>, step: Double, currentText: @escaping (Double) -> String, minText: String, maxText: String, disabled: Bool = false) -> some View {
+    private func sliderRow(labels: (title: String, description: String), value: Binding<Double>, range: ClosedRange<Double>, step: Double, currentText: @escaping (Double) -> String, minText: String, maxText: String, disabled: Bool = false,
+                           disabledHint: String = "Enable Scroll Inertia to adjust this.") -> some View {
         VStack(alignment: .leading, spacing: 10) {
             SettingText(labels: labels)
 
@@ -567,7 +590,7 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
 
             if disabled {
-                Text("Enable Scroll Inertia to adjust this.")
+                Text(L(disabledHint))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

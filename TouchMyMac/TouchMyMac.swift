@@ -118,6 +118,7 @@ class TouchMyMac: NSObject, ObservableObject {
     let launchLanguage = AppLanguage.saved
     @Published var isCursorHiddenWhileScrolling = true
     @Published var scrollSpeedMultiplier: CGFloat = 1.0
+    @Published var pinchZoomSpeed: CGFloat = 1.5
     @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.92
     @Published var scrollInertiaVelocityMultiplier: CGFloat = 1.0
     
@@ -650,6 +651,7 @@ extension TouchMyMac {
             "isScrollInertiaEnabled" : true,
             "isCursorHiddenWhileScrolling" : true,
             "scrollSpeedMultiplier" : 1.0,
+            "pinchZoomSpeed" : 1.5,
             "scrollInertiaDecelerationPerFrame" : 0.92,
             "scrollInertiaVelocityMultiplier" : 1.0
         ])
@@ -681,6 +683,7 @@ extension TouchMyMac {
             $isScrollInertiaEnabled.assign(to: \.scrollInertiaEnabled, on: touchManager),
             $isCursorHiddenWhileScrolling.assign(to: \.hidesCursorWhileScrolling, on: touchManager),
             $scrollSpeedMultiplier.assign(to: \.scrollSpeedMultiplier, on: touchManager),
+            $pinchZoomSpeed.assign(to: \.pinchZoomSpeed, on: touchManager),
             $scrollInertiaDecelerationPerFrame.assign(to: \.scrollInertiaDecelerationPerFrame, on: touchManager),
             $scrollInertiaVelocityMultiplier.assign(to: \.scrollInertiaVelocityMultiplier, on: touchManager)
         ]
@@ -711,6 +714,8 @@ extension TouchMyMac {
         isCursorHiddenWhileScrolling = defaults.bool(forKey: "isCursorHiddenWhileScrolling")
         touchManager.hidesCursorWhileScrolling = isCursorHiddenWhileScrolling
         scrollSpeedMultiplier = CGFloat(defaults.double(forKey: "scrollSpeedMultiplier"))
+        pinchZoomSpeed = CGFloat(defaults.double(forKey: "pinchZoomSpeed"))
+        touchManager.pinchZoomSpeed = pinchZoomSpeed
         scrollInertiaDecelerationPerFrame = CGFloat(defaults.double(forKey: "scrollInertiaDecelerationPerFrame"))
         scrollInertiaVelocityMultiplier = CGFloat(defaults.double(forKey: "scrollInertiaVelocityMultiplier"))
         touchManager.scrollInertiaEnabled = isScrollInertiaEnabled
@@ -740,6 +745,7 @@ extension TouchMyMac {
         defaults.set(isScrollInertiaEnabled, forKey: "isScrollInertiaEnabled")
         defaults.set(isCursorHiddenWhileScrolling, forKey: "isCursorHiddenWhileScrolling")
         defaults.set(Double(scrollSpeedMultiplier), forKey: "scrollSpeedMultiplier")
+        defaults.set(Double(pinchZoomSpeed), forKey: "pinchZoomSpeed")
         defaults.set(Double(scrollInertiaDecelerationPerFrame), forKey: "scrollInertiaDecelerationPerFrame")
         defaults.set(Double(scrollInertiaVelocityMultiplier), forKey: "scrollInertiaVelocityMultiplier")
     }
@@ -1023,6 +1029,10 @@ extension TouchMyMac {
         case \.isScrollInertiaEnabled:
             return(L("Scroll Inertia"),
                    L("Keeps scrolling for a short time after you lift your finger (iPad-like)."))
+
+        case \.pinchZoomSpeed:
+            return(L("Pinch Zoom Speed"),
+                   L("At 1.0 content zooms exactly as far as your fingers spread. Higher values zoom further for the same spread, so one hand reaches larger sizes."))
 
         case \.scrollSpeedMultiplier:
             return(L("Scroll Speed"),

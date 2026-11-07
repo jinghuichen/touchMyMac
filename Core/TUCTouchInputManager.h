@@ -83,6 +83,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property CGFloat scrollSpeedMultiplier;
 
 /**
+ How far a pinch zooms for the same finger spread: 1 zooms exactly with the fingers. Default 1.5.
+ */
+@property (nonatomic) CGFloat pinchZoomSpeed;
+
+/**
  Enables/disables three-finger swipe recognition.
  Default value is YES.
  */

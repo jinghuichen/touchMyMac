@@ -126,6 +126,7 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Scroll Inertia | On | Keep scrolling after a flick |
 | Decay Speed | 0.92 | How quickly inertia slows down (higher glides longer) |
 | Inertia Amount | 1.0 | How far inertia glides |
+| Pinch Zoom Speed | 1.5 | How far a pinch zooms; 1.0 follows the fingers exactly |
 | Double Click Zone | 8 mm | How close two taps must be to count as a double click |
 | Error Resistance | 4 | Reports to wait before dropping a touch on panels that lose contacts |
 | Ignore Origin Touches | On | Ignore bogus touches at (0, 0) that some panels send |

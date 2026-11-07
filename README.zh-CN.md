@@ -126,6 +126,7 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 | Scroll Inertia | 开 | 甩动后继续滚动 |
 | Decay Speed | 0.92 | 惯性减速的快慢（越大滑得越久） |
 | Inertia Amount | 1.0 | 惯性能滑多远 |
+| Pinch Zoom Speed | 1.5 | 捏合缩放的倍率，1.0 时严格跟着手指 |
 | Double Click Zone | 8 毫米 | 两次轻点相距多近才算双击 |
 | Error Resistance | 4 | 对容易丢失触点的屏幕，等多少个报告再判定手指离开 |
 | Ignore Origin Touches | 开 | 忽略部分屏幕会发出的 (0, 0) 假触点 |

@@ -122,8 +122,12 @@
 "Decay Speed" = "衰减速度";
 "Higher values decay slower; lower values decay faster." = "数值越大衰减越慢，越小衰减越快。";
 "Inertia Amount" = "惯性大小";
+"Pinch Zoom Speed" = "捏合缩放倍率";
+"At 1.0 content zooms exactly as far as your fingers spread. Higher values zoom further for the same spread, so one hand reaches larger sizes." = "1.0 时内容严格跟着手指张合缩放。数值越大，同样的张合放大得越多，单手也能放得更大。";
+"Zoom" = "缩放";
 "Scales how far scrolling glides after you lift your finger." = "调整抬起手指后滚动滑行的距离。";
 "Enable Scroll Inertia to adjust this." = "打开滚动惯性后才能调整。";
+"Turn on Magnification under Gestures to adjust this." = "在“手势”里打开缩放后才能调整。";
 
 /* Slider values */
 "Current %.2f s" = "当前 %.2f 秒";
