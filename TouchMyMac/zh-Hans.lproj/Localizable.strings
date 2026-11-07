@@ -45,6 +45,7 @@
 "Startup" = "启动";
 "Status" = "状态";
 "About" = "关于";
+"Dragging" = "拖动";
 "Gesture Toggles" = "手势开关";
 "Shortcut Mapping" = "快捷键映射";
 "Touch Timing" = "触摸时间";
@@ -94,7 +95,9 @@
 "Three-Finger Swipe Up" = "三指上滑";
 "Swipe up with three fingers to open Mission Control." = "三指上滑打开调度中心。";
 "Drag Controls Directly" = "直接拖动控件";
-"Sliders, scroll bars, dividers, window title bars and window edges follow your finger right away, even if your finger lands a little beside a divider or edge. Elsewhere, dragging scrolls unless you hold still first." = "滑块、滚动条、分割线、窗口标题栏和窗口边缘会立刻跟随手指，手指落在分割线或窗口边缘旁边一点也能抓住。其他地方拖动是滚动，除非先按住不动。";
+"Sliders, scroll bars, dividers, window title bars and windows in Mission Control follow your finger right away. Elsewhere, dragging scrolls unless you hold still first." = "滑块、滚动条、分割线、窗口标题栏和调度中心里的窗口会立刻跟随手指。其他地方拖动是滚动，除非先按住不动。";
+"Small Target Assist" = "小目标辅助";
+"A finger that lands a little beside a divider, a window's edge or corner, or a window's close, minimize or zoom button still gets it, and the top of a window drags it in apps that don't report a title bar. In Mission Control, desktops show their close buttons while your finger is on them." = "手指落在分割线、窗口边缘或角落、窗口左上角的关闭/最小化/缩放按钮旁边一点也能点中；不报告标题栏的应用里，拖动窗口顶部可以移动窗口。在调度中心里，手指放在桌面上时会显示桌面的关闭按钮。";
 "Three-Finger Swipe Left / Right" = "三指左右轻扫";
 "Swipe left or right with three fingers to move between spaces and full-screen apps." = "三指左右轻扫，在桌面空间和全屏 App 之间切换。";
 "Four-Finger Swipe Up Keyboard" = "四指上滑呼出键盘";

@@ -131,7 +131,8 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 | Setting | Default | What it does |
 |---|---|---|
 | Open at Login | Off | Start TouchMyMac when you log in (macOS 13 or later) |
-| Drag Controls Directly | On | Sliders, scroll bars, dividers, title bars and window edges follow your finger right away, even from a little beside a divider or edge; elsewhere, dragging scrolls |
+| Drag Controls Directly | On | Sliders, scroll bars, dividers, title bars, window edges and windows in Mission Control follow your finger right away; elsewhere, dragging scrolls |
+| Small Target Assist | On | A finger a little beside a divider, a window edge or corner, or a window's close, minimize or zoom button still gets it; the top of a window drags it in apps without a reported title bar; Mission Control shows desktop close buttons under your finger |
 | Hold Duration | 0.4 s | How long a finger holds still before the mouse button goes down, so moving drags instead of scrolling |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
 | Hide Pointer While Scrolling | On | Hide the pointer while your finger scrolls |
@@ -184,7 +185,7 @@ xattr -dr com.apple.quarantine /Applications/TouchMyMac.app
 
 Pausing longer than the Hold Duration before you move starts a drag. Start moving sooner, or raise Hold Duration in Settings → Tuning.
 
-Sliders, scroll bars, dividers, window title bars and window edges move as soon as you drag them. A finger that lands a little beside a divider or a window edge still grabs it. If you'd rather scroll everywhere, turn off Drag Controls Directly in Settings → Gestures.
+Sliders, scroll bars, dividers, window title bars and window edges move as soon as you drag them. In Mission Control, windows move as soon as you drag them too. With Small Target Assist (on by default), a finger that lands a little beside a divider, a window edge or a window's close, minimize or zoom button still gets it, and tapping a desktop's close button in Mission Control works even though the button only shows on hover. If you'd rather scroll everywhere, turn off Drag Controls Directly in Settings → Gestures.
 </details>
 
 <details>
