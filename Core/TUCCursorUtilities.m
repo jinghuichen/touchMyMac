@@ -413,15 +413,12 @@ static void TUCAllowCursorHidingInBackground(void) {
 }
 
 - (void)postScrollDelta:(CGPoint)delta scrollPhase:(CGScrollPhase)scrollPhase momentumPhase:(CGMomentumScrollPhase)momentumPhase {
+    // Hidden only while the finger scrolls. Inertia often moves nothing (a sideways swipe on a page
+    // that can't scroll sideways), so waiting for it would leave the pointer hidden for no reason.
     if (scrollPhase == kCGScrollPhaseBegan) {
         [self setCursorHiddenForScroll:YES];
-    } else if (scrollPhase == kCGScrollPhaseEnded || momentumPhase == kCGMomentumScrollPhaseEnd) {
-        // Inertia starts right after the finger's scroll ends; show the pointer once neither is running.
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!self.isScrollGestureActive && !self.isMomentumActive) {
-                [self setCursorHiddenForScroll:NO];
-            }
-        });
+    } else if (scrollPhase == kCGScrollPhaseEnded) {
+        [self setCursorHiddenForScroll:NO];
     }
 
     // Scroll events carry whole pixels. Carry the remainder forward instead of truncating it,

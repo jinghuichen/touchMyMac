@@ -114,7 +114,7 @@
 "Error Resistance" = "容错";
 "If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs." = "如果你的触摸屏上报触摸很不稳定，把这个滑块调大可以让输入更稳，代价是判断抬手会更慢。";
 "Hide Pointer While Scrolling" = "滚动时隐藏指针";
-"Scrolling leaves the pointer where it was, so it's hidden until the scroll and its inertia end." = "滚动时指针不会跟着动，所以在滚动和惯性结束前把它隐藏。";
+"Scrolling leaves the pointer where it was, so it's hidden while your finger scrolls." = "滚动时指针不会跟着动，所以手指滚动期间把它隐藏。";
 "Scroll Inertia" = "滚动惯性";
 "Keeps scrolling for a short time after you lift your finger (iPad-like)." = "抬起手指后继续滚动一小段（像 iPad 一样）。";
 "Scroll Speed" = "滚动速度";

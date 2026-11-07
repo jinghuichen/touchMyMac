@@ -32,7 +32,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Velocity (px/s) below which inertial scrolling stops.
 @property (nonatomic) CGFloat momentumVelocityStopThreshold;
 
-/// Hides the pointer while a scroll gesture or its inertia runs, since scrolling leaves it where it was.
+/// Hides the pointer while a finger scrolls, since scrolling leaves it where it was.
 @property (nonatomic) BOOL hidesCursorWhileScrolling;
 
 - (CGPoint)currentCursorLocation;

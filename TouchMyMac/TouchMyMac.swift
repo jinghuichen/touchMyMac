@@ -996,7 +996,7 @@ extension TouchMyMac {
 
         case \.isCursorHiddenWhileScrolling:
             return(L("Hide Pointer While Scrolling"),
-                   L("Scrolling leaves the pointer where it was, so it's hidden until the scroll and its inertia end."))
+                   L("Scrolling leaves the pointer where it was, so it's hidden while your finger scrolls."))
 
         case \.isScrollInertiaEnabled:
             return(L("Scroll Inertia"),

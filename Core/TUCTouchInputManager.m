@@ -87,14 +87,20 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 
 static const CGFloat kStationaryThresholdMM = 0.1f;
 static const CGFloat kTapCancelDistanceMM = 4.0f;
+// A finger flattening or rolling as it lands moves its contact point steadily, measured up to 3 mm
+// within the 60-125 ms a tap touches the screen. Deliberate swipes cover 5-7 mm in their first 16 ms.
+// So early on a touch has to move further before it stops being a tap and starts to scroll.
+static const NSTimeInterval kTapLandingDuration = 0.15;
+static const CGFloat kTapLandingDistanceMM = 8.0f;
 static const NSTimeInterval kControlLookupWait = 0.08; // how long a moving finger waits for Accessibility's answer
 
 static BOOL TUCIsDraggableControlAtLocation(CGPoint location);
-static const CGFloat kTapFallbackDistanceMM = 5.0f;
+static const CGFloat kTapFallbackDistanceMM = 8.0f;
 // Inertia slower than this (points per second, under ~1.3 points per 60Hz frame) looks stopped,
 // so a tap then is a click. Faster, the tap only stops the scroll, like on iPad.
 static const CGFloat kTapStopsMomentumSpeed = 80.0f;
-static const NSTimeInterval kTapFallbackDuration = 0.25;
+// Measured from touch-down to the liftoff report, which some screens send about 100 ms late.
+static const NSTimeInterval kTapFallbackDuration = 0.35;
 static const CGFloat kScrollReanchorDistanceMM = 25.0f;
 static const NSTimeInterval kTouchInactivityTimeout = 0.12;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
@@ -260,6 +266,13 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     return sqrt(dxMM * dxMM + dyMM * dyMM);
 }
 
+/// How far the cursor finger may move and still be a tap: further while it is still landing.
+- (CGFloat)tapCancelDistanceMM {
+    BOOL landing = self.cursorTouchBeganDate != nil
+        && [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate] < kTapLandingDuration;
+    return landing ? kTapLandingDistanceMM : kTapCancelDistanceMM;
+}
+
 - (CGFloat)cursorTouchDistanceFromStartMM {
     if (self.cursorTouch == nil) {
         return 0;
@@ -412,7 +425,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         
         if (touch.uuid == self.cursorTouch.uuid) {
             CGFloat distanceFromStartMM = [self cursorTouchDistanceFromStartMM];
-            if (distanceFromStartMM > kTapCancelDistanceMM) {
+            if (distanceFromStartMM > [self tapCancelDistanceMM]) {
                 self.cursorTouchQualifiedForTap = NO;
             }
             
@@ -655,7 +668,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
     } else {
         // Delay drag/scroll activation until travel is clearly beyond tap jitter.
-        if ([self cursorTouchDistanceFromStartMM] <= kTapCancelDistanceMM) {
+        if ([self cursorTouchDistanceFromStartMM] <= [self tapCancelDistanceMM]) {
             return;
         }
         if (self.lastPerformedAction != TUCCursorActionScroll && self.sessionMaxTouchCount < 2) {
