@@ -431,6 +431,8 @@ static inline CFTimeInterval TUCNowSeconds(void) {
     return CACurrentMediaTime();
 }
 
+static const CGEventField kTUCScrollWheelEventDirectionInvertedFromDevice = (CGEventField)137;
+
 /**
  Only the active app may hide the pointer through public API, and TouchMyMac runs in the background.
  The window server's "SetsCursorInBackground" connection property lifts that limit. It is private,
@@ -505,6 +507,11 @@ static void TUCAllowCursorHidingInBackground(void) {
     // Phases make apps treat this like trackpad scrolling: smooth, with rubber banding at the edges.
     CGEventSetIntegerValueField(event, kCGScrollWheelEventScrollPhase, scrollPhase);
     CGEventSetIntegerValueField(event, kCGScrollWheelEventMomentumPhase, momentumPhase);
+    // The content follows the finger, as on a trackpad with natural scrolling, whose events are marked as
+    // inverted from the device (NSEvent.isDirectionInvertedFromDevice, undocumented field 137). Views that
+    // move with the finger rather than scroll content, like the picture-in-picture video window, undo
+    // that inversion to get the finger's direction; without the mark they moved the opposite way.
+    CGEventSetIntegerValueField(event, kTUCScrollWheelEventDirectionInvertedFromDevice, 1);
     CGEventPost(kCGHIDEventTap, event);
     CFRelease(event);
 }
