@@ -120,12 +120,13 @@ Everything below lives in the Settings window (menu bar icon → Settings).
 |---|---|---|
 | Open at Login | Off | Start TouchMyMac when you log in (macOS 13 or later) |
 | Drag Controls Directly | On | Sliders, scroll bars, splitters and title bars follow your finger right away; elsewhere, dragging scrolls |
-| Hold Duration | 0.1 s | How long to hold still before moving turns into a drag instead of a scroll |
+| Hold Duration | 0.4 s | How long a finger holds still before the mouse button goes down, so moving drags instead of scrolling |
 | Scroll Speed | 1.0 | Content movement per finger movement; 1.0 keeps the content under your finger |
-| Hide Pointer While Scrolling | On | Hide the pointer until a scroll and its inertia end |
+| Hide Pointer While Scrolling | On | Hide the pointer while your finger scrolls |
 | Scroll Inertia | On | Keep scrolling after a flick |
 | Decay Speed | 0.92 | How quickly inertia slows down (higher glides longer) |
 | Inertia Amount | 1.0 | How far inertia glides |
+| Pinch Zoom Speed | 1.5 | How far a pinch zooms; 1.0 follows the fingers exactly |
 | Double Click Zone | 8 mm | How close two taps must be to count as a double click |
 | Error Resistance | 4 | Reports to wait before dropping a touch on panels that lose contacts |
 | Ignore Origin Touches | On | Ignore bogus touches at (0, 0) that some panels send |
@@ -202,6 +203,12 @@ Many touchscreens made for Windows start as a single-touch mouse until the compu
 <summary><b>Input is jumpy or touches get stuck</b></summary>
 
 Raise Error Resistance and keep Ignore Origin Touches on. The Diagnostics pane shows live touch counts and the recognized gestures, which helps narrow it down.
+</details>
+
+<details>
+<summary><b>How do I switch the app between English and Chinese?</b></summary>
+
+Pick it under **Settings → General → Language** and click Restart Now. The default, System Default, follows your system: Simplified Chinese if it comes first in System Settings → General → Language & Region, English otherwise.
 </details>
 
 ## 🛠 Build from source

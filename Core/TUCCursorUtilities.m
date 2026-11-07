@@ -19,6 +19,14 @@
 @property NSDate *timeOfLastClick;
 @property CGPoint locationOfLastClick;
 
+// A click's mouse-up waits a moment after its mouse-down (see `postClickDown:`).
+@property BOOL hasPendingClickUp;
+@property CGEventType pendingClickUpType;
+@property CGMouseButton pendingClickUpButton;
+@property CGPoint pendingClickUpLocation;
+@property int64_t pendingClickUpClickState;
+@property NSInteger pendingClickUpToken;
+
 @property BOOL isLeftMouseDown;
 
 @property BOOL isScrollGestureActive;
@@ -42,13 +50,21 @@
 @property CGPoint coastVelocity;
 
 @property BOOL isMomentumActive;
-@property CGPoint momentumScrollVelocity;
-@property CFTimeInterval momentumLastTickTime;
+@property CGPoint momentumScrollVelocity; // current inertia velocity, for `momentumScrollSpeed`
+@property CFTimeInterval momentumStartTime;
+@property CFTimeInterval momentumDuration;
+@property CGFloat momentumDistance;
+@property CGFloat momentumTravelled;
+@property CGPoint momentumDirection; // unit vector
 
 @property (strong, nullable) id frameDriver; // CADisplayLink, or NSTimer before macOS 14
 
 @property BOOL isMagnifying;
-@property CGFloat lastPinchDistance;
+@property CGFloat pinchTargetSpan;   // latest finger distance
+@property CGFloat pinchFilteredSpan; // smoothed toward the target each frame
+@property CGFloat pinchPostedSpan;   // the distance the zoom posted so far corresponds to
+@property CFTimeInterval pinchLastFrameTime;
+@property CGPoint pinchCenter;       // between the fingers; apps zoom around the event location
 
 @property BOOL isHoldingShortcut;
 @property (copy) NSArray<NSDictionary<NSString *, NSNumber *> *> *heldModifierDescriptors;
@@ -64,7 +80,6 @@
     NSInteger _scrollSampleCount;
 }
 
-static const NSTimeInterval kMomentumTickInterval = 1.0 / 60.0; // the "frame" that deceleration settings refer to
 static const NSTimeInterval kFallbackFrameInterval = 1.0 / 120.0;
 static const CFTimeInterval kDefaultReportInterval = 1.0 / 100.0;
 // One Euro filter settings for the finger path: cutoff frequency at rest (Hz), how fast the cutoff
@@ -78,7 +93,6 @@ static const CFTimeInterval kScrollVelocityHorizon = 0.1;
 static const CFTimeInterval kScrollAssumeStoppedTime = 0.04;
 // When touch reports stop for this many report intervals, keep the content moving (see `advanceScrollOutput`).
 static const CFTimeInterval kScrollCoastAfterReportIntervals = 3.0;
-static const CGFloat kDefaultMomentumVelocityStopThreshold = 5.0;     // px/s
 static const CGFloat kDefaultMomentumStartThreshold = 120.0;          // px/s
 static const CGFloat kDefaultMomentumDecelerationPerFrame = 0.92;     // 60Hz
 static const CGKeyCode kUpArrowKeyCode = 126;
@@ -100,12 +114,12 @@ static const useconds_t kShortcutSequenceStepDelayMicroseconds = 30000;
             sharedInstance.locationOfLastClick = CGPointZero;
             sharedInstance.reportInterval = kDefaultReportInterval;
             sharedInstance.momentumScrollVelocity = CGPointZero;
-            sharedInstance.momentumLastTickTime = 0;
+            sharedInstance.momentumPointsPerMM = 4.0;
+            sharedInstance.pinchZoomExponent = 1.0;
             sharedInstance.momentumScrollEnabled = YES;
             sharedInstance.momentumDecelerationPerFrame = kDefaultMomentumDecelerationPerFrame;
             sharedInstance.momentumVelocityMultiplier = 1.0;
             sharedInstance.momentumStartThreshold = kDefaultMomentumStartThreshold;
-            sharedInstance.momentumVelocityStopThreshold = kDefaultMomentumVelocityStopThreshold;
         }
     });
     return sharedInstance;
@@ -325,7 +339,57 @@ static const useconds_t kShortcutSequenceStepDelayMicroseconds = 30000;
 
 
 
+/**
+ How long a synthesized click keeps the button down. Posting down and up together (the same
+ timestamp, while the system already reports the button as up) made AppKit controls skip about
+ one click in ten and never show their pressed state. A real mouse click lasts 60-120 ms.
+ */
+static const NSTimeInterval kClickPressDuration = 0.04;
+
+- (void)postClickDownOfType:(CGEventType)downType upType:(CGEventType)upType button:(CGMouseButton)button
+                         at:(CGPoint)location clickState:(int64_t)clickState {
+    [self postPendingClickUp];
+
+    CGEventRef event = CGEventCreateMouseEvent(NULL, downType, location, button);
+    CGEventSetIntegerValueField(event, kCGMouseEventClickState, clickState);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+
+    self.hasPendingClickUp = YES;
+    self.pendingClickUpType = upType;
+    self.pendingClickUpButton = button;
+    self.pendingClickUpLocation = location;
+    self.pendingClickUpClickState = clickState;
+    NSInteger token = ++self.pendingClickUpToken;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kClickPressDuration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self.pendingClickUpToken == token) {
+            [self postPendingClickUp];
+        }
+    });
+}
+
+/// Releases a click that is still held, so any mouse event that follows comes after it.
+- (void)postPendingClickUp {
+    if (!self.hasPendingClickUp) {
+        return;
+    }
+    self.hasPendingClickUp = NO;
+    CGEventRef event = CGEventCreateMouseEvent(NULL, self.pendingClickUpType, self.pendingClickUpLocation, self.pendingClickUpButton);
+    CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.pendingClickUpClickState);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+}
+
+- (void)movePointerKeepingScrollTo:(CGPoint)aLocation {
+    [self postPendingClickUp];
+    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, aLocation, kCGMouseButtonLeft);
+    CGEventSetIntegerValueField(event, kCGMouseEventClickState, 0);
+    CGEventPost(kCGHIDEventTap, event);
+    CFRelease(event);
+}
+
 - (void)moveCursorTo:(CGPoint)aLocation {
+    [self postPendingClickUp];
     [self cancelMomentumScroll];
     [self stopDraggingCursor];
     
@@ -413,15 +477,12 @@ static void TUCAllowCursorHidingInBackground(void) {
 }
 
 - (void)postScrollDelta:(CGPoint)delta scrollPhase:(CGScrollPhase)scrollPhase momentumPhase:(CGMomentumScrollPhase)momentumPhase {
+    // Hidden only while the finger scrolls. Inertia often moves nothing (a sideways swipe on a page
+    // that can't scroll sideways), so waiting for it would leave the pointer hidden for no reason.
     if (scrollPhase == kCGScrollPhaseBegan) {
         [self setCursorHiddenForScroll:YES];
-    } else if (scrollPhase == kCGScrollPhaseEnded || momentumPhase == kCGMomentumScrollPhaseEnd) {
-        // Inertia starts right after the finger's scroll ends; show the pointer once neither is running.
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!self.isScrollGestureActive && !self.isMomentumActive) {
-                [self setCursorHiddenForScroll:NO];
-            }
-        });
+    } else if (scrollPhase == kCGScrollPhaseEnded) {
+        [self setCursorHiddenForScroll:NO];
     }
 
     // Scroll events carry whole pixels. Carry the remainder forward instead of truncating it,
@@ -454,13 +515,9 @@ static void TUCAllowCursorHidingInBackground(void) {
 - (void)performClickAt:(CGPoint)aLocation {
     [self updateCursorClickCountWithLocation:aLocation];
     
-    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseDown, aLocation, kCGMouseButtonLeft);
-    CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
-    CGEventPost(kCGHIDEventTap, event);
-    CGEventSetType(event, kCGEventLeftMouseUp);
-    CGEventPost(kCGHIDEventTap, event);
-    CFRelease(event);
-    
+    [self postClickDownOfType:kCGEventLeftMouseDown upType:kCGEventLeftMouseUp button:kCGMouseButtonLeft
+                           at:aLocation clickState:self.cursorClickCount];
+
     self.timeOfLastClick = [NSDate date];
     self.locationOfLastClick = aLocation;
 }
@@ -492,17 +549,14 @@ static void TUCAllowCursorHidingInBackground(void) {
 
 
 - (void)performSecondaryClickAt:(CGPoint)aLocation {
-    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventRightMouseDown, aLocation, kCGMouseButtonRight);
-    CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
-    CGEventPost(kCGHIDEventTap, event);
-    CGEventSetType(event, kCGEventRightMouseUp);
-    CGEventPost(kCGHIDEventTap, event);
-    CFRelease(event);
+    [self postClickDownOfType:kCGEventRightMouseDown upType:kCGEventRightMouseUp button:kCGMouseButtonRight
+                           at:aLocation clickState:1];
 }
 
 
 
 - (void)dragCursorTo:(CGPoint)aLocation phase:(NSTouchPhase)phase  {
+    [self postPendingClickUp];
     if (phase == NSTouchPhaseEnded || phase == NSTouchPhaseCancelled) {
         [self stopDraggingCursor];
         return;
@@ -529,6 +583,7 @@ static void TUCAllowCursorHidingInBackground(void) {
 
 
 - (void)stopDraggingCursor {
+    [self postPendingClickUp];
     if (self.isLeftMouseDown) {
         CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventLeftMouseUp, [self currentCursorLocation], kCGMouseButtonLeft);
         CGEventSetIntegerValueField(event, kCGMouseEventClickState, self.cursorClickCount);
@@ -542,6 +597,7 @@ static void TUCAllowCursorHidingInBackground(void) {
 
 
 - (void)scroll:(CGPoint)translation phase:(NSTouchPhase)phase {
+    [self postPendingClickUp];
     [self stopDraggingCursor];
 
     CFTimeInterval now = TUCNowSeconds();
@@ -793,12 +849,62 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
     return self.isMomentumActive;
 }
 
+- (CGFloat)momentumScrollSpeed {
+    return self.isMomentumActive ? TUCLength(self.momentumScrollVelocity) : 0;
+}
+
+/*
+ Inertia follows Android's fling (android.widget.OverScroller): from the release speed and the scroll
+ friction it gets a total distance and a duration, both fixed when the finger lifts, so the content stops
+ at a definite point instead of crawling on for a while it looks still. Position eases out along
+ 1 - (1 - t/T)^(1/INFLEXION): with Android's constants that curve starts exactly at the release speed and
+ reaches zero speed at T.
+ */
+static const double kFlingInflexion = 0.35;                 // Scroller.INFLEXION
+static const double kFlingDecelerationRate = 2.3582017;     // Scroller.DECELERATION_RATE = ln(0.78) / ln(0.9)
+static const double kFlingFriction = 0.015;                 // ViewConfiguration.getScrollFriction()
+static const double kFlingGravity = 9.80665;                // SensorManager.GRAVITY_EARTH, m/s^2
+
 - (void)startMomentumWithVelocity:(CGPoint)velocity at:(CFTimeInterval)now {
     [self cancelMomentumScroll];
 
+    CGFloat speed = TUCLength(velocity);
+    if (speed <= 0) {
+        return;
+    }
+
+    // Android's physical coefficient: gravity in pixels per second squared, times its 0.84 tuning factor.
+    CGFloat pointsPerMM = self.momentumPointsPerMM;
+    if (!isfinite(pointsPerMM) || pointsPerMM <= 0) {
+        pointsPerMM = 4.0;
+    }
+    double pointsPerInch = pointsPerMM * 25.4;
+    double physicalCoefficient = kFlingGravity * 39.37 * pointsPerInch * 0.84;
+
+    // The deceleration setting maps onto friction: the default 0.92 is Android's, higher glides further.
+    double decay = TUCClamp(self.momentumDecelerationPerFrame, 0.5f, 0.995f);
+    double friction = kFlingFriction * log(decay) / log(kDefaultMomentumDecelerationPerFrame);
+
+    double l = log(kFlingInflexion * speed / (friction * physicalCoefficient));
+    double rate = kFlingDecelerationRate;
+    double duration = exp(l / (rate - 1.0));
+    double distance = friction * physicalCoefficient * exp(rate / (rate - 1.0) * l);
+
+    // Inertia Amount stretches distance and duration together, which keeps the start speed.
+    double glide = MAX(self.momentumVelocityMultiplier, 0.1f);
+    duration *= glide;
+    distance *= glide;
+    if (!(duration > 0) || !(distance > 0)) {
+        return;
+    }
+
     self.isMomentumActive = YES;
+    self.momentumStartTime = now;
+    self.momentumDuration = duration;
+    self.momentumDistance = distance;
+    self.momentumTravelled = 0;
+    self.momentumDirection = TUCPointScale(velocity, 1 / speed);
     self.momentumScrollVelocity = velocity;
-    self.momentumLastTickTime = now;
     [self postScrollDelta:CGPointZero scrollPhase:0 momentumPhase:kCGMomentumScrollPhaseBegin];
     [self startFrameDriver];
 }
@@ -809,28 +915,21 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
         return;
     }
 
-    CFTimeInterval now = TUCNowSeconds();
-    CFTimeInterval dt = now - self.momentumLastTickTime;
-    self.momentumLastTickTime = now;
-    if (dt <= 0) {
-        return;
-    }
-    dt = (CFTimeInterval)TUCClamp((CGFloat)dt, 0.001f, 0.05f);
+    double exponent = 1.0 / kFlingInflexion;
+    double t = TUCNowSeconds() - self.momentumStartTime;
+    double remaining = MAX(0.0, 1.0 - t / self.momentumDuration);
+    double travelled = self.momentumDistance * (1.0 - pow(remaining, exponent));
 
-    CGPoint v = self.momentumScrollVelocity;
-    if (fabs(v.x) < self.momentumVelocityStopThreshold && fabs(v.y) < self.momentumVelocityStopThreshold) {
+    [self postScrollDelta:TUCPointScale(self.momentumDirection, (CGFloat)(travelled - self.momentumTravelled))
+              scrollPhase:0 momentumPhase:kCGMomentumScrollPhaseContinue];
+    self.momentumTravelled = (CGFloat)travelled;
+
+    double speed = self.momentumDistance * exponent / self.momentumDuration * pow(remaining, exponent - 1.0);
+    self.momentumScrollVelocity = TUCPointScale(self.momentumDirection, (CGFloat)speed);
+
+    if (remaining <= 0) {
         [self cancelMomentumScroll];
-        return;
     }
-
-    [self postScrollDelta:TUCPointScale(v, (CGFloat)dt) scrollPhase:0 momentumPhase:kCGMomentumScrollPhaseContinue];
-
-    // Exponential decay, expressed per 60Hz frame so the setting means the same at any refresh rate.
-    // The velocity multiplier stretches the decay (glides further) rather than raising the start speed,
-    // so for a given multiplier the glide covers the same distance without speeding up at liftoff.
-    CGFloat glide = MAX(self.momentumVelocityMultiplier, 0.1f);
-    CGFloat decay = (CGFloat)pow(self.momentumDecelerationPerFrame, dt / kMomentumTickInterval / glide);
-    self.momentumScrollVelocity = TUCPointScale(v, decay);
 }
 
 - (void)cancelMomentumScroll {
@@ -840,7 +939,6 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
         [self postScrollDelta:CGPointZero scrollPhase:0 momentumPhase:kCGMomentumScrollPhaseEnd];
     }
     self.momentumScrollVelocity = CGPointZero;
-    self.momentumLastTickTime = 0;
 }
 
 
@@ -872,11 +970,19 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
 }
 
 - (void)frameTick:(id)sender {
+    BOOL running = NO;
     if (self.isScrollGestureActive) {
         [self advanceScrollOutput];
+        running = YES;
     } else if (self.isMomentumActive) {
         [self advanceMomentum];
-    } else {
+        running = YES;
+    }
+    if (self.isMagnifying) {
+        [self advancePinchOutput];
+        running = YES;
+    }
+    if (!running) {
         [self.frameDriver invalidate];
         self.frameDriver = nil;
     }
@@ -903,8 +1009,9 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
         return;
     }
     
-    // start with a valid mouse event, as it has a valid timestamp
-    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, [self currentCursorLocation], kCGMouseButtonLeft);
+    // start with a valid mouse event, as it has a valid timestamp; apps zoom around its location
+    CGPoint location = self.isMagnifying ? self.pinchCenter : [self currentCursorLocation];
+    CGEventRef event = CGEventCreateMouseEvent(NULL, kCGEventMouseMoved, location, kCGMouseButtonLeft);
     
     CGEventSetType(event, 29); // type gesture
     CGEventSetFlags(event, 0);
@@ -938,33 +1045,59 @@ static double TUCFitSlopeAtZero(const double *t, const double *value, NSInteger 
 }
 
 
-- (void)magnifyLocationA:(CGPoint)p1 locationB:(CGPoint)p2 relativeP1:(CGPoint)r1 relP2:(CGPoint)r2 {
+/*
+ Like Android's ScaleGestureDetector, the zoom follows the ratio of finger distances, so content scales
+ exactly with the fingers: spreading them to twice the distance doubles the size. macOS apps apply each
+ event's magnification as a factor of (1 + magnification), so each frame posts span / postedSpan - 1.
+ The distance is smoothed over ~12 ms and posted once per display frame, so finger jitter and the touch
+ report rate don't show up as uneven zooming. Each event is anchored at the point between the fingers
+ as it is now, not where the pinch began, so the content under the fingers stays under them.
+ */
+static const CFTimeInterval kPinchSmoothingTime = 0.012;
+
+- (void)updatePinchSpan:(CGFloat)span center:(CGPoint)center {
+    [self postPendingClickUp];
     [self stopDraggingCursor];
-    
-    NSTouchPhase phase = NSTouchPhaseMoved;
-    
-    CGFloat dx = r1.x - r2.x;
-    CGFloat dy = r1.y - r2.y;
-    
-    CGFloat distance = sqrt( pow(dx, 2) + pow(dy, 2) );
-    CGFloat delta = distance - self.lastPinchDistance;
-    
-    self.lastPinchDistance = distance;
-    
-    if (!self.isMagnifying) {
-        CGPoint middle = CGPointMake(0.5f * (p1.x + p2.x), 0.5f * (p1.y + p2.y));
-        [self moveCursorTo:middle];
-        phase = NSTouchPhaseBegan;
-        delta = 0;
-        self.isMagnifying = YES;
+    if (span <= 0) {
+        return;
     }
-    
-    [self magnify:delta * 4 phase:phase];
+    self.pinchTargetSpan = span;
+    self.pinchCenter = center;
+    if (!self.isMagnifying) {
+        [self moveCursorTo:center]; // zooming apps zoom around the pointer
+        self.isMagnifying = YES;
+        self.pinchFilteredSpan = span;
+        self.pinchPostedSpan = span;
+        self.pinchLastFrameTime = TUCNowSeconds();
+        [self magnify:0 phase:NSTouchPhaseBegan];
+        [self startFrameDriver];
+    }
 }
 
+- (void)advancePinchOutput {
+    CFTimeInterval now = TUCNowSeconds();
+    CFTimeInterval dt = now - self.pinchLastFrameTime;
+    self.pinchLastFrameTime = now;
+    CGFloat blend = (CGFloat)(1.0 - exp(-MAX(dt, 0.0) / kPinchSmoothingTime));
+    self.pinchFilteredSpan += (self.pinchTargetSpan - self.pinchFilteredSpan) * blend;
+    [self postPinchTowardSpan:self.pinchFilteredSpan];
+}
+
+- (void)postPinchTowardSpan:(CGFloat)span {
+    // Pinch Zoom Speed 1 zooms exactly with the fingers; higher values raise the ratio to that power.
+    CGFloat exponent = MAX(self.pinchZoomExponent, 0.1f);
+    CGFloat magnification = (CGFloat)pow(span / self.pinchPostedSpan, exponent) - 1;
+    if (fabs(magnification) < 0.0005) {
+        return;
+    }
+    [self magnify:magnification phase:NSTouchPhaseMoved];
+    self.pinchPostedSpan = span;
+}
 
 - (void)stopMagnifying {
     if (self.isMagnifying) {
+        // Post what the smoothing still owed, so the final size matches the fingers.
+        [self postPinchTowardSpan:self.pinchTargetSpan];
         self.isMagnifying = NO;
         [self magnify:0 phase:NSTouchPhaseEnded];
     }

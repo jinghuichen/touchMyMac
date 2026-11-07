@@ -27,14 +27,15 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 
 @property BOOL cursorTouchQualifiedForTap; // if the cursor entered moving state once it can no longer be interpreted as tap
 @property BOOL cursorTouchDidHold; //
-@property (strong) NSDate *cursorTouchStationarySinceDate;
 @property (strong) NSDate *cursorTouchBeganDate;
 @property CGPoint cursorTouchStartLocation;
 @property TUCControlUnderTouch controlUnderCursorTouch;
+@property BOOL deviceReportsLiftoff; // the screen sends liftoffs, so a quiet finger is still down
+@property BOOL longPressFeedbackShown;
 @property NSInteger controlLookupSession; // bumped per touch, so a late answer can't apply to the next touch
 @property TUCCursorAction lastPerformedAction;
 @property BOOL suppressEndedPrimaryTouchAction;
-@property BOOL cursorTouchStoppedMomentum; // the touch landed during inertia, so lifting it is not a click
+@property BOOL cursorTouchStoppedMomentum; // the touch landed on visibly moving inertia, so lifting it is not a click
 
 // A touch session lasts from the first finger landing until all fingers lifted.
 @property NSInteger sessionMaxTouchCount;
@@ -86,14 +87,29 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 @synthesize scrollInertiaVelocityMultiplier = _scrollInertiaVelocityMultiplier;
 
 static const CGFloat kStationaryThresholdMM = 0.1f;
-static const CGFloat kTapCancelDistanceMM = 4.0f;
+/**
+ One finger is classified the way Android's GestureDetector does it: it stays a possible tap until it moves
+ further than the tap slop from where it landed (then it scrolls) or stays inside it for the hold duration
+ (then it presses the mouse). Lifting a possible tap clicks, however long it took.
+ Fingers flattening or rolling as they land move the contact point up to 3 mm on some screens, so the slop
+ is wider than Android's 8 dp (about 1.3 mm on a phone). Deliberate swipes pass it within about 20 ms.
+ */
+static const CGFloat kTapSlopMM = 6.0f;
+// Two fingers pinch once their distance changes this much (Android uses twice the touch slop). Both
+// fingers drift as they land, so their distance can wander up to about twice one finger's drift.
+static const CGFloat kPinchSpanSlopMM = 8.0f;
 static const NSTimeInterval kControlLookupWait = 0.08; // how long a moving finger waits for Accessibility's answer
 
 static BOOL TUCIsDraggableControlAtLocation(CGPoint location);
-static const CGFloat kTapFallbackDistanceMM = 5.0f;
-static const NSTimeInterval kTapFallbackDuration = 0.25;
+// Inertia slower than this (points per second, under ~1.3 points per 60Hz frame) looks stopped,
+// so a tap then is a click. Faster, the tap only stops the scroll, like on iPad.
+static const CGFloat kTapStopsMomentumSpeed = 80.0f;
 static const CGFloat kScrollReanchorDistanceMM = 25.0f;
+// Some screens never report a liftoff, they just stop reporting; then a touch ends after this much silence.
 static const NSTimeInterval kTouchInactivityTimeout = 0.12;
+// Screens that do report liftoffs may also go quiet while a finger rests still. Ending the touch then
+// released long presses mid-drag, so once a liftoff has been seen only a much longer silence ends a touch.
+static const NSTimeInterval kTouchInactivityTimeoutWithLiftoffs = 1.0;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxHorizontalTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxVerticalTravelMM = 18.0f;
@@ -149,6 +165,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 }
 
 - (void)didConnectTouchscreen {
+    self.deviceReportsLiftoff = NO;
     [self.delegate touchscreenDidConnect];
 }
 
@@ -205,6 +222,11 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         return;
     }
 
+    // A finger resting still may send no reports, so the hold is also checked here, on time.
+    if (self.postMouseEvents && self.cursorTouch.isActive && [self cursorTouchReachedHold]) {
+        [self beginLongPress];
+    }
+
     NSDate *now = [NSDate date];
     BOOL didChange = NO;
 
@@ -221,7 +243,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         }
 
         NSTimeInterval idle = [now timeIntervalSinceDate:lastUpdatedAt];
-        if (idle < kTouchInactivityTimeout) {
+        if (idle < (self.deviceReportsLiftoff ? kTouchInactivityTimeoutWithLiftoffs : kTouchInactivityTimeout)) {
             continue;
         }
 
@@ -326,6 +348,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
 
 - (void)stopCurrentGesture {
+    if (self.longPressFeedbackShown) {
+        self.longPressFeedbackShown = NO;
+        if ([self.delegate respondsToSelector:@selector(touchDidEndLongPress)]) {
+            [self.delegate touchDidEndLongPress];
+        }
+    }
     [[TUCCursorUtilities sharedInstance] stopDraggingCursor];
     [[TUCCursorUtilities sharedInstance] stopMagnifying];
     [[TUCCursorUtilities sharedInstance] endScrollGesture];
@@ -344,12 +372,24 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
  */
 - (void)updateTouch:(NSInteger)contactID withLocation:(CGPoint)digitizerPoint onSurface:(BOOL)isOnSurface tooLargeForFinger:(BOOL)confidenceFlag {
     
-    // assume that this is an erroneous message!!!
-    if (self.ignoreOriginTouches && CGPointEqualToPoint(digitizerPoint, CGPointZero)) {
+    TUCTouch *liftedTouch = nil;
+    if (!isOnSurface) {
+        liftedTouch = [self findTouchWithID:contactID includingPastTouches:NO];
+        if (liftedTouch == nil) {
+            return; // a liftoff for a contact that already ended
+        }
+        self.deviceReportsLiftoff = YES;
+    } else if (self.ignoreOriginTouches && CGPointEqualToPoint(digitizerPoint, CGPointZero)) {
+        // Some screens send stray contacts at (0,0).
         return;
     }
-    
-    CGPoint point = [self convertDigitizerPointToRelativeScreenPoint:digitizerPoint];
+
+    // Many screens report a liftoff without coordinates, at (0,0). Dropping it as a stray contact left the
+    // touch on until reports had stopped for a while, so a quick second tap continued the first one and a
+    // fast double click never happened. The liftoff ends the touch where it last was.
+    CGPoint point = (liftedTouch != nil && CGPointEqualToPoint(digitizerPoint, CGPointZero))
+        ? liftedTouch.location
+        : [self convertDigitizerPointToRelativeScreenPoint:digitizerPoint];
     
     BOOL isNewTouch = NO;
     TUCTouch *touch = [self obtainTouchWithID:contactID isNew:&isNewTouch];
@@ -372,14 +412,14 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         self.cursorTouch = touch;
         self.cursorTouchQualifiedForTap = YES;
         self.cursorTouchDidHold = NO;
-        self.cursorTouchStationarySinceDate = nil;
         self.cursorTouchBeganDate = [NSDate date];
         self.cursorTouchStartLocation = point;
         self.gestureAdditionalTouch = nil;
         self.sessionMaxTouchCount = 1;
         self.twoFingerTapPossible = YES;
         self.pendingTwoFingerTap = NO;
-        self.cursorTouchStoppedMomentum = [TUCCursorUtilities sharedInstance].isMomentumScrolling;
+        // Read before this touch-down stops the inertia.
+        self.cursorTouchStoppedMomentum = [TUCCursorUtilities sharedInstance].momentumScrollSpeed >= kTapStopsMomentumSpeed;
         self.controlUnderCursorTouch = TUCControlUnderTouchOther;
         if (self.dragsControlsDirectly && isOnSurface) {
             [self lookUpControlAtLocation:[self convertScreenPointRelativeToAbsolute:point]];
@@ -407,15 +447,8 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         BOOL isStationary = [self distanceMMFromPoint:touch.location toPoint:touch.previousLocation] < kStationaryThresholdMM;
         
         if (touch.uuid == self.cursorTouch.uuid) {
-            CGFloat distanceFromStartMM = [self cursorTouchDistanceFromStartMM];
-            if (distanceFromStartMM > kTapCancelDistanceMM) {
+            if ([self cursorTouchDistanceFromStartMM] > kTapSlopMM) {
                 self.cursorTouchQualifiedForTap = NO;
-            }
-            
-            if (!isStationary) {
-                self.cursorTouchStationarySinceDate = nil;
-            } else if (touch.phase !=  NSTouchPhaseStationary) {
-                self.cursorTouchStationarySinceDate = [NSDate date];
             }
         }
         
@@ -528,18 +561,13 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         [self performMouseEventForGesture:TUCCursorGestureTouchDown];
         return;
     }
-    
-    
-    else if (phase == NSTouchPhaseStationary) {
-        NSTimeInterval holdDuration = 0;
-        if (self.cursorTouchStationarySinceDate != nil) {
-            holdDuration = [[NSDate date] timeIntervalSinceDate:self.cursorTouchStationarySinceDate];
-        }
-        if (self.cursorTouchQualifiedForTap && holdDuration > self.holdDuration && self.sessionMaxTouchCount < 2) {
-            // the user left the finger on the screen for the min duration required to produce a hold
-            self.cursorTouchDidHold = YES;
-        }
 
+    if ((phase == NSTouchPhaseStationary || phase == NSTouchPhaseMoved) && [self cursorTouchReachedHold]) {
+        [self beginLongPress];
+        return;
+    }
+    
+    if (phase == NSTouchPhaseStationary) {
         if (self.lastPerformedAction == TUCCursorActionScroll) {
             // Report the pause to the scroll, so lifting a finger that stopped doesn't fling.
             [self performMouseEventForGesture:TUCCursorGestureDrag];
@@ -550,12 +578,9 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
     
     
     else if (phase == NSTouchPhaseEnded) {
-        CGFloat movementMM = [self cursorTouchDistanceFromStartMM];
-        NSTimeInterval touchDuration = self.cursorTouchBeganDate == nil ? 0 : [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate];
-        BOOL shortTouchWithSmallTravel = touchDuration <= kTapFallbackDuration && movementMM <= kTapFallbackDistanceMM;
-        // Only a single finger on its own can be a tap.
-        BOOL noOtherActiveTouches = touches.count == 0 && self.sessionMaxTouchCount < 2;
-        BOOL shouldTreatAsTap = noOtherActiveTouches && (self.cursorTouchQualifiedForTap || shortTouchWithSmallTravel);
+        // A tap is a single finger that never left the tap slop and never became a long press.
+        BOOL shouldTreatAsTap = self.cursorTouchQualifiedForTap && !self.cursorTouchDidHold
+            && touches.count == 0 && self.sessionMaxTouchCount < 2;
         BOOL suppressEndedAction = self.suppressEndedPrimaryTouchAction;
 
         if (!suppressEndedAction && self.sessionMaxTouchCount == 2 && self.twoFingerTapPossible) {
@@ -575,6 +600,7 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         
         if (!suppressEndedAction && completedMultitouchGesture == _TUCCursorGestureNone ) {
             if (self.cursorTouchDidHold) {
+                // Releases the long press or control drag: that release is the click.
                 [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
             } else if (!shouldTreatAsTap) {
                 [self performMouseEventForGesture:TUCCursorGestureDrag];
@@ -616,23 +642,31 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
         // Keep reference in sync every frame to avoid stale pointer causing pinch latch.
         self.gestureAdditionalTouch = otherTouch;
 
-        // While both fingers rest where they landed this may still be a two-finger tap,
-        // so finger jitter must not start a pinch.
-        if (self.identifiedMultitouchGesture == _TUCCursorGestureNone && !self.twoFingerTapPossible) {
-            CGPoint trajectoryA = [cursorTouch trajectorySign];
-            CGPoint trajectoryB = [otherTouch trajectorySign];
-
-            if (   !CGPointEqualToPoint(trajectoryA, CGPointZero)
-                && !CGPointEqualToPoint(trajectoryB, CGPointZero)
-                && !CGPointEqualToPoint(trajectoryA, trajectoryB)) {
-                self.identifiedMultitouchGesture = TUCCursorGesturePinch;
-            }
-        }
-        
         // other finger lifted, gesture ended
         if (!self.gestureAdditionalTouch.isActive) {
             self.gestureAdditionalTouch = nil;
             [self stopCurrentGesture];
+        }
+
+        // Like Android's ScaleGestureDetector: a pinch changes the distance between the fingers, a two-finger
+        // scroll moves the point between them. Whichever passes its slop first decides, and the choice stays.
+        // While both fingers rest where they landed this may still be a two-finger tap.
+        if (self.gestureAdditionalTouch != nil && self.identifiedMultitouchGesture == _TUCCursorGestureNone
+            && !self.twoFingerTapPossible && self.lastPerformedAction != TUCCursorActionScroll) {
+            CGFloat spanChangeMM = fabs([self distanceMMFromPoint:cursorTouch.location toPoint:otherTouch.location]
+                                        - [self distanceMMFromPoint:cursorTouch.initialLocation toPoint:otherTouch.initialLocation]);
+            CGPoint focus = CGPointMake((cursorTouch.location.x + otherTouch.location.x) / 2,
+                                        (cursorTouch.location.y + otherTouch.location.y) / 2);
+            CGPoint initialFocus = CGPointMake((cursorTouch.initialLocation.x + otherTouch.initialLocation.x) / 2,
+                                               (cursorTouch.initialLocation.y + otherTouch.initialLocation.y) / 2);
+            CGFloat focusMoveMM = [self distanceMMFromPoint:focus toPoint:initialFocus];
+
+            if (spanChangeMM > kPinchSpanSlopMM && spanChangeMM >= focusMoveMM
+                && [self actionForGesture:TUCCursorGesturePinch] != TUCCursorActionNone) {
+                self.identifiedMultitouchGesture = TUCCursorGesturePinch;
+            } else if (focusMoveMM <= kTapSlopMM) {
+                return; // neither yet
+            }
         }
         
         
@@ -649,9 +683,12 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
 
     if (self.cursorTouchDidHold) {
         [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
+        if (self.longPressFeedbackShown && [self.delegate respondsToSelector:@selector(touchLongPressDidMoveToScreenLocation:)]) {
+            [self.delegate touchLongPressDidMoveToScreenLocation:[self convertScreenPointRelativeToAbsolute:cursorTouch.location]];
+        }
     } else {
-        // Delay drag/scroll activation until travel is clearly beyond tap jitter.
-        if ([self cursorTouchDistanceFromStartMM] <= kTapCancelDistanceMM) {
+        // Still a possible tap: wait for the finger to leave the tap slop or lift.
+        if (self.cursorTouchQualifiedForTap) {
             return;
         }
         if (self.lastPerformedAction != TUCCursorActionScroll && self.sessionMaxTouchCount < 2) {
@@ -700,10 +737,34 @@ static const NSTimeInterval kTwoFingerTapMaxDuration = 0.5;
  moves with the finger from there, and keep dragging until liftoff.
  */
 - (void)beginControlDrag {
+    [self pressAtLandingLocation];
+    [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
+}
+
+/// Whether the cursor finger has stayed a possible tap for the hold duration, making it a long press.
+- (BOOL)cursorTouchReachedHold {
+    return self.cursorTouchQualifiedForTap && !self.cursorTouchDidHold && self.sessionMaxTouchCount < 2
+        && !self.cursorTouchStoppedMomentum // a touch that stopped inertia is not pressing anything
+        && self.cursorTouchBeganDate != nil
+        && [[NSDate date] timeIntervalSinceDate:self.cursorTouchBeganDate] >= self.holdDuration;
+}
+
+/// A long press: the mouse goes down where the finger landed. Moving on drags (selecting text, moving
+/// files, windows in Mission Control) and lifting releases, which is a click if the finger didn't move.
+- (void)beginLongPress {
+    [self pressAtLandingLocation];
+    if ([self.delegate respondsToSelector:@selector(touchDidBeginLongPressAtScreenLocation:)]) {
+        self.longPressFeedbackShown = YES;
+        [self.delegate touchDidBeginLongPressAtScreenLocation:[self convertScreenPointRelativeToAbsolute:self.cursorTouchStartLocation]];
+    }
+}
+
+/// Presses the mouse button where the cursor finger landed; later moves drag and liftoff releases.
+- (void)pressAtLandingLocation {
     self.cursorTouchDidHold = YES;
     [[TUCCursorUtilities sharedInstance] dragCursorTo:[self convertScreenPointRelativeToAbsolute:self.cursorTouchStartLocation]
                                                 phase:NSTouchPhaseBegan];
-    [self performMouseEventForGesture:TUCCursorGestureHoldAndDrag];
+    self.lastPerformedAction = TUCCursorActionDrag;
 }
 
 static BOOL TUCRoleFollowsDrag(CFStringRef role, BOOL isElementUnderFinger) {
@@ -941,7 +1002,7 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
 
 - (BOOL)anyTouchMovedFromInitialLocation:(NSArray<TUCTouch *> *)touches {
     for (TUCTouch *touch in touches) {
-        if ([self distanceMMFromPoint:touch.location toPoint:touch.initialLocation] > kTapCancelDistanceMM) {
+        if ([self distanceMMFromPoint:touch.location toPoint:touch.initialLocation] > kTapSlopMM) {
             return YES;
         }
     }
@@ -985,7 +1046,9 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
 - (void)performMouseEventForGesture:(TUCCursorGesture)gesture {
     TUCTouch *touch = self.cursorTouch;
     
-    CGPoint screenLocation = [self convertScreenPointRelativeToAbsolute:touch.location];
+    // A tap clicks where the finger landed: a finger drifts a little as it flattens and lifts.
+    CGPoint screenLocation = [self convertScreenPointRelativeToAbsolute:
+                              gesture == TUCCursorGestureTap ? self.cursorTouchStartLocation : touch.location];
     CGPoint location2ndFinger = [self convertScreenPointRelativeToAbsolute:self.gestureAdditionalTouch.location];
     
     TUCCursorUtilities *utils = [TUCCursorUtilities sharedInstance];
@@ -1010,8 +1073,9 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
     }
     self.lastPerformedAction = action;
     
-    CGFloat doubleClickSpan = self.doubleClickTolerance * [[self touchscreen] pixelsPerMM];
-    [[TUCCursorUtilities sharedInstance] setDoubleClickTolerance:doubleClickSpan];
+    CGFloat pointsPerMM = [[self touchscreen] pixelsPerMM];
+    [[TUCCursorUtilities sharedInstance] setDoubleClickTolerance:self.doubleClickTolerance * pointsPerMM];
+    utils.momentumPointsPerMM = pointsPerMM;
     
     switch (action) {
         case TUCCursorActionNone:
@@ -1064,6 +1128,11 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
             self.lastScrollLocation = screenLocation;
             CGPoint scaledTranslation = CGPointMake(translation.x * self.scrollSpeedMultiplier,
                                                    translation.y * self.scrollSpeedMultiplier);
+            if (touch.phase == NSTouchPhaseEnded || touch.phase == NSTouchPhaseCancelled) {
+                // The pointer (hidden while scrolling) reappears where the finger lifted, not where it landed.
+                // Apps keep the scroll and its inertia on the view it started in.
+                [utils movePointerKeepingScrollTo:screenLocation];
+            }
             [utils scroll:scaledTranslation phase:touch.phase];
             
             if (touch.phase == NSTouchPhaseEnded || touch.phase == NSTouchPhaseCancelled) {
@@ -1072,15 +1141,15 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
             
             break; }
             
-        case TUCCursorActionMagnify:
-            [utils magnifyLocationA:screenLocation
-                          locationB:location2ndFinger
-            relativeP1:self.cursorTouch.location relP2:self.gestureAdditionalTouch.location];
+        case TUCCursorActionMagnify: {
+            CGFloat span = (CGFloat)hypot(screenLocation.x - location2ndFinger.x, screenLocation.y - location2ndFinger.y);
+            CGPoint center = CGPointMake((screenLocation.x + location2ndFinger.x) / 2, (screenLocation.y + location2ndFinger.y) / 2);
+            [utils updatePinchSpan:span center:center];
             
             if (touch.phase == NSTouchPhaseEnded || self.gestureAdditionalTouch.phase == NSTouchPhaseEnded) {
                 [utils stopMagnifying];
             }
-            break;
+            break; }
 
         case TUCCursorActionMissionControl:
             [utils performMissionControl];
@@ -1348,13 +1417,12 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
         self.postMouseEvents = YES;
         
         self.cursorTouchQualifiedForTap = NO;
-        self.cursorTouchStationarySinceDate = nil;
         
         self.currentFrameID = 0;
         self.identifiedMultitouchGesture = _TUCCursorGestureNone;
         
         self.doubleClickTolerance = 5;
-        self.holdDuration = 0.1;
+        self.holdDuration = 0.4;
         self.errorResistance = 0;
         
         self.ignoreOriginTouches = NO;
@@ -1364,6 +1432,7 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
         self.scrollInertiaDecelerationPerFrame = 0.92;
         self.scrollInertiaVelocityMultiplier = 1.0;
         self.scrollSpeedMultiplier = 1.0;
+        self.pinchZoomSpeed = 1.5;
         self.threeFingerSwipeEnabled = YES;
         self.threeFingerSwipeSpacesEnabled = YES;
         self.dragsControlsDirectly = YES;
@@ -1377,6 +1446,11 @@ static BOOL TUCIsDraggableControlAtLocation(CGPoint location) {
 - (void)setScrollInertiaEnabled:(BOOL)scrollInertiaEnabled {
     _scrollInertiaEnabled = scrollInertiaEnabled;
     [TUCCursorUtilities sharedInstance].momentumScrollEnabled = scrollInertiaEnabled;
+}
+
+- (void)setPinchZoomSpeed:(CGFloat)pinchZoomSpeed {
+    _pinchZoomSpeed = pinchZoomSpeed;
+    [TUCCursorUtilities sharedInstance].pinchZoomExponent = pinchZoomSpeed;
 }
 
 - (void)setHidesCursorWhileScrolling:(BOOL)hidesCursorWhileScrolling {

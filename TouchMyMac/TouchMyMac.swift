@@ -8,6 +8,47 @@
 import AppKit
 import Combine
 import IOKit.hid
+
+/// Looks up the UI text for the user's language. The keys are the English text, so a missing
+/// translation falls back to English.
+func L(_ key: String) -> String {
+    NSLocalizedString(key, comment: "")
+}
+
+/// The language picked in Settings. Stored as this app's own AppleLanguages, which macOS reads at launch.
+enum AppLanguage: String, CaseIterable, Identifiable {
+    case system
+    case english = "en"
+    case simplifiedChinese = "zh-Hans"
+
+    var id: String { rawValue }
+
+    /// Language names stay in their own language, so they can be found whatever the UI language is.
+    var title: String {
+        switch self {
+        case .system: return L("System Default")
+        case .english: return "English"
+        case .simplifiedChinese: return "简体中文"
+        }
+    }
+
+    static var saved: AppLanguage {
+        guard let domain = Bundle.main.bundleIdentifier,
+              let languages = UserDefaults.standard.persistentDomain(forName: domain)?["AppleLanguages"] as? [String],
+              let first = languages.first else {
+            return .system
+        }
+        return first.hasPrefix("zh") ? .simplifiedChinese : (first.hasPrefix("en") ? .english : .system)
+    }
+
+    func save() {
+        if self == .system {
+            UserDefaults.standard.removeObject(forKey: "AppleLanguages")
+        } else {
+            UserDefaults.standard.set([rawValue], forKey: "AppleLanguages")
+        }
+    }
+}
 import ServiceManagement
 import TouchUpCore
 
@@ -54,7 +95,7 @@ class TouchMyMac: NSObject, ObservableObject {
 
     
     
-    @Published var holdDuration: TimeInterval = 0.1
+    @Published var holdDuration: TimeInterval = 0.4
     @Published var doubleClickDistance: CGFloat = 3 //mm
     @Published var errorResistance: NSInteger = 0 // num of Reports to wait before cancelling a touch
     @Published var ignoreOriginTouches: Bool = false
@@ -71,8 +112,13 @@ class TouchMyMac: NSObject, ObservableObject {
     @Published var fourFingerSwipeLeftSequenceSpec: String = "cmd+a, delete"
 
     @Published var isScrollInertiaEnabled = true
+
+    /// The language picked in Settings, and the one this launch runs in; they differ until a restart.
+    @Published private(set) var appLanguage = AppLanguage.saved
+    let launchLanguage = AppLanguage.saved
     @Published var isCursorHiddenWhileScrolling = true
     @Published var scrollSpeedMultiplier: CGFloat = 1.0
+    @Published var pinchZoomSpeed: CGFloat = 1.5
     @Published var scrollInertiaDecelerationPerFrame: CGFloat = 0.92
     @Published var scrollInertiaVelocityMultiplier: CGFloat = 1.0
     
@@ -345,8 +391,8 @@ class TouchMyMac: NSObject, ObservableObject {
     }
 
     var inputMonitoringStatusText: String {
-        if isInputMonitoringGranted { return "Granted" }
-        return isInputMonitoringNeeded ? "Missing" : "Not needed"
+        if isInputMonitoringGranted { return L("Granted") }
+        return isInputMonitoringNeeded ? L("Missing") : L("Not needed")
     }
 
     /// Call after starting the HID manager: asks for the permission only if reading the touchscreen failed without it.
@@ -590,7 +636,7 @@ extension TouchMyMac {
         let defaults = UserDefaults.standard
         
         defaults.register(defaults: [
-            "holdDuration" : 0.1,
+            "holdDuration" : 0.4,
             "doubleClickDistance" : 8,
             "errorResistance" : 4,
             "ignoreOriginTouches" : true,
@@ -605,11 +651,16 @@ extension TouchMyMac {
             "isScrollInertiaEnabled" : true,
             "isCursorHiddenWhileScrolling" : true,
             "scrollSpeedMultiplier" : 1.0,
+            "pinchZoomSpeed" : 1.5,
             "scrollInertiaDecelerationPerFrame" : 0.92,
             "scrollInertiaVelocityMultiplier" : 1.0
         ])
         
         holdDuration = defaults.double(forKey: "holdDuration")
+        if holdDuration < 0.2 {
+            // Before 1.8 a hold started after 0.1 s, shorter than many taps, so taps turned into presses.
+            holdDuration = 0.4
+        }
         doubleClickDistance = defaults.double(forKey: "doubleClickDistance")
         errorResistance = defaults.integer(forKey: "errorResistance")
         ignoreOriginTouches = defaults.bool(forKey: "ignoreOriginTouches")
@@ -632,6 +683,7 @@ extension TouchMyMac {
             $isScrollInertiaEnabled.assign(to: \.scrollInertiaEnabled, on: touchManager),
             $isCursorHiddenWhileScrolling.assign(to: \.hidesCursorWhileScrolling, on: touchManager),
             $scrollSpeedMultiplier.assign(to: \.scrollSpeedMultiplier, on: touchManager),
+            $pinchZoomSpeed.assign(to: \.pinchZoomSpeed, on: touchManager),
             $scrollInertiaDecelerationPerFrame.assign(to: \.scrollInertiaDecelerationPerFrame, on: touchManager),
             $scrollInertiaVelocityMultiplier.assign(to: \.scrollInertiaVelocityMultiplier, on: touchManager)
         ]
@@ -662,6 +714,8 @@ extension TouchMyMac {
         isCursorHiddenWhileScrolling = defaults.bool(forKey: "isCursorHiddenWhileScrolling")
         touchManager.hidesCursorWhileScrolling = isCursorHiddenWhileScrolling
         scrollSpeedMultiplier = CGFloat(defaults.double(forKey: "scrollSpeedMultiplier"))
+        pinchZoomSpeed = CGFloat(defaults.double(forKey: "pinchZoomSpeed"))
+        touchManager.pinchZoomSpeed = pinchZoomSpeed
         scrollInertiaDecelerationPerFrame = CGFloat(defaults.double(forKey: "scrollInertiaDecelerationPerFrame"))
         scrollInertiaVelocityMultiplier = CGFloat(defaults.double(forKey: "scrollInertiaVelocityMultiplier"))
         touchManager.scrollInertiaEnabled = isScrollInertiaEnabled
@@ -691,6 +745,7 @@ extension TouchMyMac {
         defaults.set(isScrollInertiaEnabled, forKey: "isScrollInertiaEnabled")
         defaults.set(isCursorHiddenWhileScrolling, forKey: "isCursorHiddenWhileScrolling")
         defaults.set(Double(scrollSpeedMultiplier), forKey: "scrollSpeedMultiplier")
+        defaults.set(Double(pinchZoomSpeed), forKey: "pinchZoomSpeed")
         defaults.set(Double(scrollInertiaDecelerationPerFrame), forKey: "scrollInertiaDecelerationPerFrame")
         defaults.set(Double(scrollInertiaVelocityMultiplier), forKey: "scrollInertiaVelocityMultiplier")
     }
@@ -854,6 +909,24 @@ extension TouchMyMac: TUCTouchDelegate {
         }
     }
 
+    func touchDidBeginLongPress(atScreenLocation location: CGPoint) {
+        performUIUpdate {
+            (NSApp.delegate as? AppDelegate)?.pressIndicatorPanel.show(atScreenLocation: location)
+        }
+    }
+
+    func touchLongPressDidMove(toScreenLocation location: CGPoint) {
+        performUIUpdate {
+            (NSApp.delegate as? AppDelegate)?.pressIndicatorPanel.move(toScreenLocation: location)
+        }
+    }
+
+    func touchDidEndLongPress() {
+        performUIUpdate {
+            (NSApp.delegate as? AppDelegate)?.pressIndicatorPanel.hide()
+        }
+    }
+
     func performCustomAction(_ action: TUCCursorAction) {
         performUIUpdate {
             switch action {
@@ -890,84 +963,88 @@ extension TouchMyMac {
     func uiLabels<T>(for keyPath: KeyPath<TouchMyMac, T>) -> (title:String, description:String) {
         switch keyPath {
         case \.isPublishingMouseEventsEnabled:
-            return("Control Mouse with Touch",
-                   "Turns the driver on or off.")
+            return(L("Control Mouse with Touch"),
+                   L("Turns the driver on or off."))
             
         case \.opensAtLogin:
-            return("Open at Login",
-                   "Starts TouchMyMac when you log in, so the touchscreen works right away.")
+            return(L("Open at Login"),
+                   L("Starts TouchMyMac when you log in, so the touchscreen works right away."))
 
         case \.connectedTouchscreen:
-            return("Assign Mouse Events to",
-                   "Specifies which screen should receive the touch events.")
+            return(L("Assign Mouse Events to"),
+                   L("Specifies which screen should receive the touch events."))
             
         case \.isSecondaryClickEnabled:
-            return("Secondary Click",
-                   "Tap the screen with two fingers at once to secondary click at the first finger, like on a Mac trackpad.")
+            return(L("Secondary Click"),
+                   L("Tap the screen with two fingers at once to secondary click at the first finger, like on a Mac trackpad."))
             
         case \.isMagnificationEnabled:
-            return("Magnification",
-                   "Pinch two fingers to increase or decrease the size of the content. (EXPERIMENTAL)")
+            return(L("Magnification"),
+                   L("Pinch two fingers to increase or decrease the size of the content. (EXPERIMENTAL)"))
 
         case \.isThreeFingerSwipeEnabled:
-            return("Three-Finger Swipe Up",
-                   "Swipe up with three fingers to open Mission Control.")
+            return(L("Three-Finger Swipe Up"),
+                   L("Swipe up with three fingers to open Mission Control."))
 
         case \.isControlDragEnabled:
-            return("Drag Controls Directly",
-                   "Sliders, scroll bars, splitters and window title bars follow your finger right away. Elsewhere, dragging scrolls unless you hold still first.")
+            return(L("Drag Controls Directly"),
+                   L("Sliders, scroll bars, splitters and window title bars follow your finger right away. Elsewhere, dragging scrolls unless you hold still first."))
 
         case \.isThreeFingerSwipeSpacesEnabled:
-            return("Three-Finger Swipe Left / Right",
-                   "Swipe left or right with three fingers to move between spaces and full-screen apps.")
+            return(L("Three-Finger Swipe Left / Right"),
+                   L("Swipe left or right with three fingers to move between spaces and full-screen apps."))
 
         case \.isFourFingerSwipeUpKeyboardEnabled:
-            return("Four-Finger Swipe Up Keyboard",
-                   "Swipe up with four fingers to show the floating keyboard, and swipe down with four fingers to hide it.")
+            return(L("Four-Finger Swipe Up Keyboard"),
+                   L("Swipe up with four fingers to show the floating keyboard, and swipe down with four fingers to hide it."))
 
         case \.fiveFingerHoldShortcutSpec:
-            return("Five-Finger Hold Shortcut",
-                   "Hold five fingers still to keep a shortcut chord pressed. Example: fn or cmd+shift.")
+            return(L("Five-Finger Hold Shortcut"),
+                   L("Hold five fingers still to keep a shortcut chord pressed. Example: fn or cmd+shift."))
 
         case \.fourFingerSwipeLeftSequenceSpec:
-            return("Four-Finger Left Swipe Sequence",
-                   "Swipe left with four fingers to fire a shortcut sequence. Example: cmd+a, delete.")
+            return(L("Four-Finger Left Swipe Sequence"),
+                   L("Swipe left with four fingers to fire a shortcut sequence. Example: cmd+a, delete."))
             
         case \.holdDuration:
-            return("Hold Duration",
-                   "How long do you have to hold finger to initiate hold&drag")
+            return(L("Hold Duration"),
+                   L("Hold a finger still this long to press the mouse button. Then move to drag, for example to select text or move files."))
             
         case \.doubleClickDistance:
-            return("Double Click Zone",
-                   "How many mm can two taps be apart from each other to qualify double click")
+            return(L("Double Click Zone"),
+                   L("How many mm can two taps be apart from each other to qualify double click"))
             
         case \.ignoreOriginTouches:
-            return("Ignore Origin Touches",
-                   "If your touchscreen randomly sends coordinate (0,0) in its datastream, toggle this option to make input more stable.")
+            return(L("Ignore Origin Touches"),
+                   L("If your touchscreen randomly sends coordinate (0,0) in its datastream, toggle this option to make input more stable."))
             
         case \.errorResistance:
-            return("Error Resistance",
-                   "If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs.")
+            return(L("Error Resistance"),
+                   L("If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs."))
 
         case \.isCursorHiddenWhileScrolling:
-            return("Hide Pointer While Scrolling",
-                   "Scrolling leaves the pointer where it was, so it's hidden until the scroll and its inertia end.")
+            return(L("Hide Pointer While Scrolling"),
+                   L("Scrolling leaves the pointer where it was, so it's hidden while your finger scrolls."))
 
         case \.isScrollInertiaEnabled:
-            return("Scroll Inertia",
-                   "Keeps scrolling for a short time after you lift your finger (iPad-like).")
+            return(L("Scroll Inertia"),
+                   L("Keeps scrolling for a short time after you lift your finger (iPad-like)."))
+
+        case \.pinchZoomSpeed:
+            return(L("Pinch Zoom Speed"),
+                   L("At 1.0 content zooms exactly as far as your fingers spread. Higher values zoom further for the same spread, so one hand reaches larger sizes."))
 
         case \.scrollSpeedMultiplier:
-            return("Scroll Speed",
-                   "Scales regular one-finger drag scrolling. Higher values scroll faster for the same finger travel.")
+            return(L("Scroll Speed"),
+                   L("Scales regular one-finger drag scrolling. Higher values scroll faster for the same finger travel."))
 
         case \.scrollInertiaDecelerationPerFrame:
-            return("Decay Speed",
-                   "Higher values decay slower; lower values decay faster.")
+            return(L("Decay Speed"),
+                   L("Higher values decay slower; lower values decay faster."))
 
         case \.scrollInertiaVelocityMultiplier:
-            return("Inertia Amount",
-                   "Scales how far scrolling glides after you lift your finger.")
+            return(L("Inertia Amount"),
+                   L("Scales how far scrolling glides after you lift your finger."))
             
         default:
             return("\(keyPath)", "")
@@ -988,10 +1065,10 @@ enum ConnectionState: Int {
 
     var displayName: String {
         switch self {
-        case .uncertain: return "Connected, no display"
-        case .disconnected: return "Not connected"
-        case .connectedAuto: return "Connected (display picked automatically)"
-        case .connectedPreferred: return "Connected"
+        case .uncertain: return L("Connected, no display")
+        case .disconnected: return L("Not connected")
+        case .connectedAuto: return L("Connected (display picked automatically)")
+        case .connectedPreferred: return L("Connected")
         }
     }
 }
@@ -1013,6 +1090,33 @@ extension TUCScreen: Identifiable {
 // MARK: - Open at Login
 extension TouchMyMac {
 
+    var languageNeedsRestart: Bool {
+        appLanguage != launchLanguage
+    }
+
+    func setAppLanguage(_ language: AppLanguage) {
+        language.save()
+        appLanguage = language
+    }
+
+    /// Quits and opens the app again, so a new language takes effect.
+    func relaunch() {
+        let path = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "sleep 0.5; /usr/bin/open '\(path)'"]
+        do {
+            try task.run()
+            NSApp.terminate(nil)
+        } catch {
+            addDiagnosticsEvent("Relaunch failed: \(error.localizedDescription)")
+        }
+    }
+
+    static var loginItemTurnedOffNote: String {
+        L("Turned off in System Settings → General → Login Items. Allow TouchMyMac there.")
+    }
+
     var canOpenAtLogin: Bool {
         if #available(macOS 13.0, *) { return true }
         return false
@@ -1021,14 +1125,14 @@ extension TouchMyMac {
     func refreshOpensAtLogin() {
         guard #available(macOS 13.0, *) else {
             opensAtLogin = false
-            openAtLoginNote = "Needs macOS 13 or later. Add TouchMyMac in System Settings → Users & Groups → Login Items instead."
+            openAtLoginNote = L("Needs macOS 13 or later. Add TouchMyMac in System Settings → Users & Groups → Login Items instead.")
             return
         }
         let status = SMAppService.mainApp.status
         opensAtLogin = status == .enabled
         if status == .requiresApproval {
-            openAtLoginNote = "Turned off in System Settings → General → Login Items. Allow TouchMyMac there."
-        } else if openAtLoginNote?.hasPrefix("Turned off") == true {
+            openAtLoginNote = Self.loginItemTurnedOffNote
+        } else if openAtLoginNote == Self.loginItemTurnedOffNote {
             openAtLoginNote = nil
         }
     }
@@ -1043,7 +1147,7 @@ extension TouchMyMac {
             }
             openAtLoginNote = nil
         } catch {
-            openAtLoginNote = "Couldn't change the login item: \(error.localizedDescription)"
+            openAtLoginNote = String(format: L("Couldn't change the login item: %@"), error.localizedDescription)
             addDiagnosticsEvent("Open at Login failed: \(error.localizedDescription)")
         }
         refreshOpensAtLogin()

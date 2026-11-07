@@ -1,0 +1,167 @@
+/* 简体中文。键是英文原文，见 L() in TouchMyMac.swift。 */
+
+/* MARK: - Menu bar menu */
+"Control Mouse with Touch" = "用触摸控制鼠标";
+"Settings…" = "设置…";
+"Quit" = "退出";
+"Ready: touch control is on" = "就绪：触摸控制已开启";
+"Touch control is paused" = "触摸控制已暂停";
+"Waiting for a touchscreen" = "正在等待触摸屏";
+"Needs Accessibility permission" = "需要辅助功能权限";
+"Needs Input Monitoring permission" = "需要输入监控权限";
+"Accessibility: Allowed" = "辅助功能：已允许";
+"Accessibility: Not Allowed – Open Settings…" = "辅助功能：未允许 – 打开设置…";
+"TouchMyMac may control the mouse and keyboard." = "TouchMyMac 可以控制鼠标和键盘。";
+"Turn on TouchMyMac in Privacy & Security → Accessibility. After an update, remove it from the list and add it again." = "在“隐私与安全性 → 辅助功能”里打开 TouchMyMac。更新之后，请把它从列表里删掉再重新添加。";
+"Input Monitoring: Allowed" = "输入监控：已允许";
+"Input Monitoring: Not Allowed – Open Settings…" = "输入监控：未允许 – 打开设置…";
+"TouchMyMac may read the touchscreen's touch data." = "TouchMyMac 可以读取触摸屏的触摸数据。";
+"Turn on TouchMyMac in Privacy & Security → Input Monitoring. macOS won't let the app read this touchscreen without it." = "在“隐私与安全性 → 输入监控”里打开 TouchMyMac。没有这项权限，macOS 不允许 App 读取这块触摸屏。";
+"Touchscreen: %@" = "触摸屏：%@";
+"Touchscreen: Not Connected" = "触摸屏：未连接";
+"Touchscreen: No Display Found" = "触摸屏：找不到显示器";
+"Touchscreen: Waiting for Input Monitoring" = "触摸屏：等待输入监控权限";
+"Connect the touchscreen's USB cable." = "请连接触摸屏的 USB 线。";
+"Allow Input Monitoring first; the touchscreen shows up after that." = "请先允许输入监控，之后触摸屏才会出现。";
+"Touches land on this display. Pick another one if it's the wrong monitor." = "触摸会落在这块显示器上。如果选错了，请换一块。";
+"Connected, but no touches can be read until Input Monitoring is allowed." = "已连接，但在允许输入监控之前读不到触摸。";
+"Touches Land On" = "触摸落在";
+"Automatic" = "自动";
+"%@ (This Mac)" = "%@（本机）";
+
+/* MARK: - Settings window */
+"TouchMyMac Settings" = "TouchMyMac 设置";
+"Preferences" = "偏好设置";
+"General" = "通用";
+"Gestures" = "手势";
+"Tuning" = "调校";
+"Diagnostics" = "诊断";
+"Input and screen routing" = "输入与屏幕分配";
+"Gesture actions and mappings" = "手势动作与快捷键";
+"Thresholds and scrolling" = "阈值与滚动";
+"Debug and live status" = "调试与实时状态";
+
+"Input" = "输入";
+"Startup" = "启动";
+"Status" = "状态";
+"About" = "关于";
+"Gesture Toggles" = "手势开关";
+"Shortcut Mapping" = "快捷键映射";
+"Touch Timing" = "触摸时间";
+"Scroll" = "滚动";
+"Reliability" = "稳定性";
+"Actions" = "操作";
+"Live Diagnostics" = "实时诊断";
+
+"Accessibility Access Required" = "需要辅助功能权限";
+"TouchMyMac needs Accessibility access before macOS will accept the injected mouse and keyboard events." = "TouchMyMac 需要辅助功能权限，macOS 才会接受它发送的鼠标和键盘事件。";
+"Input Monitoring Access Required" = "需要输入监控权限";
+"macOS won't let TouchMyMac read this touchscreen without Input Monitoring. Turn it on in System Settings → Privacy & Security → Input Monitoring." = "没有输入监控权限，macOS 不允许 TouchMyMac 读取这块触摸屏。请在“系统设置 → 隐私与安全性 → 输入监控”里打开它。";
+"Grant Access" = "授予权限";
+
+"No connected touchscreen detected yet." = "还没有检测到已连接的触摸屏。";
+"Accessibility" = "辅助功能";
+"Input Monitoring" = "输入监控";
+"Input Publishing" = "输入发送";
+"Touchscreen" = "触摸屏";
+"Assigned Screen" = "分配的屏幕";
+"Granted" = "已授予";
+"Missing" = "缺失";
+"Not needed" = "不需要";
+"Enabled" = "已开启";
+"Disabled" = "已关闭";
+"(Auto)" = "（自动）";
+"Connected" = "已连接";
+"Connected (display picked automatically)" = "已连接（自动选择的显示器）";
+"Connected, no display" = "已连接，没有显示器";
+"Not connected" = "未连接";
+
+"Needs macOS 13 or later. Add TouchMyMac in System Settings → Users & Groups → Login Items instead." = "需要 macOS 13 或更高版本。请改为在“系统设置 → 用户与群组 → 登录项”里添加 TouchMyMac。";
+"Turned off in System Settings → General → Login Items. Allow TouchMyMac there." = "已在“系统设置 → 通用 → 登录项”里关闭。请在那里允许 TouchMyMac。";
+"Couldn't change the login item: %@" = "无法更改登录项：%@";
+"Touch input for macOS" = "为 macOS 带来触摸输入";
+
+/* MARK: - Setting titles and descriptions */
+"Turns the driver on or off." = "打开或关闭驱动。";
+"Open at Login" = "登录时打开";
+"Starts TouchMyMac when you log in, so the touchscreen works right away." = "登录时启动 TouchMyMac，触摸屏开机就能用。";
+"Assign Mouse Events to" = "把鼠标事件分配给";
+"Specifies which screen should receive the touch events." = "指定哪块屏幕接收触摸事件。";
+"Secondary Click" = "辅助点按";
+"Tap the screen with two fingers at once to secondary click at the first finger, like on a Mac trackpad." = "两根手指同时轻点屏幕，在第一根手指的位置辅助点按（右键），和 Mac 触控板一样。";
+"Magnification" = "缩放";
+"Pinch two fingers to increase or decrease the size of the content. (EXPERIMENTAL)" = "双指捏合来放大或缩小内容。（实验性）";
+"Three-Finger Swipe Up" = "三指上滑";
+"Swipe up with three fingers to open Mission Control." = "三指上滑打开调度中心。";
+"Drag Controls Directly" = "直接拖动控件";
+"Sliders, scroll bars, splitters and window title bars follow your finger right away. Elsewhere, dragging scrolls unless you hold still first." = "滑块、滚动条、分割线和窗口标题栏会立刻跟随手指。其他地方拖动是滚动，除非先按住不动。";
+"Three-Finger Swipe Left / Right" = "三指左右轻扫";
+"Swipe left or right with three fingers to move between spaces and full-screen apps." = "三指左右轻扫，在桌面空间和全屏 App 之间切换。";
+"Four-Finger Swipe Up Keyboard" = "四指上滑呼出键盘";
+"Swipe up with four fingers to show the floating keyboard, and swipe down with four fingers to hide it." = "四指上滑显示浮动键盘，四指下滑隐藏它。";
+"Five-Finger Hold Shortcut" = "五指按住快捷键";
+"Hold five fingers still to keep a shortcut chord pressed. Example: fn or cmd+shift." = "五根手指按住不动，保持一组快捷键按下。例如：fn 或 cmd+shift。";
+"Four-Finger Left Swipe Sequence" = "四指左滑按键序列";
+"Swipe left with four fingers to fire a shortcut sequence. Example: cmd+a, delete." = "四指左滑，依次触发一串快捷键。例如：cmd+a, delete。";
+"Example: fn or cmd+shift" = "例如：fn 或 cmd+shift";
+"Example: cmd+a, delete" = "例如：cmd+a, delete";
+"Hold Duration" = "按住时长";
+"Hold a finger still this long to press the mouse button. Then move to drag, for example to select text or move files." = "手指按住不动这么久，就会按下鼠标键。之后移动手指就是拖拽，比如选文字、拖文件。";
+"Double Click Zone" = "双击范围";
+"How many mm can two taps be apart from each other to qualify double click" = "两次轻点相距多少毫米以内算作双击";
+"Ignore Origin Touches" = "忽略原点触摸";
+"If your touchscreen randomly sends coordinate (0,0) in its datastream, toggle this option to make input more stable." = "如果你的触摸屏会随机发出坐标 (0,0)，打开这个选项可以让输入更稳定。";
+"Error Resistance" = "容错";
+"If your touchscreen is really unreliable at reporting touches, increase this slider to make inputs more stable at the cost of higher latency in detecting liftoffs." = "如果你的触摸屏上报触摸很不稳定，把这个滑块调大可以让输入更稳，代价是判断抬手会更慢。";
+"Hide Pointer While Scrolling" = "滚动时隐藏指针";
+"Scrolling leaves the pointer where it was, so it's hidden while your finger scrolls." = "滚动时指针不会跟着动，所以手指滚动期间把它隐藏。";
+"Scroll Inertia" = "滚动惯性";
+"Keeps scrolling for a short time after you lift your finger (iPad-like)." = "抬起手指后继续滚动一小段（像 iPad 一样）。";
+"Scroll Speed" = "滚动速度";
+"Scales regular one-finger drag scrolling. Higher values scroll faster for the same finger travel." = "调整单指拖动滚动的倍率。数值越大，同样的手指距离滚得越快。";
+"Decay Speed" = "衰减速度";
+"Higher values decay slower; lower values decay faster." = "数值越大衰减越慢，越小衰减越快。";
+"Inertia Amount" = "惯性大小";
+"Pinch Zoom Speed" = "捏合缩放倍率";
+"At 1.0 content zooms exactly as far as your fingers spread. Higher values zoom further for the same spread, so one hand reaches larger sizes." = "1.0 时内容严格跟着手指张合缩放。数值越大，同样的张合放大得越多，单手也能放得更大。";
+"Zoom" = "缩放";
+"Scales how far scrolling glides after you lift your finger." = "调整抬起手指后滚动滑行的距离。";
+"Enable Scroll Inertia to adjust this." = "打开滚动惯性后才能调整。";
+"Turn on Magnification under Gestures to adjust this." = "在“手势”里打开缩放后才能调整。";
+
+/* Slider values */
+"Current %.2f s" = "当前 %.2f 秒";
+"Current %d mm" = "当前 %d 毫米";
+"Current %.1fx" = "当前 %.1fx";
+"Current %.2fx" = "当前 %.2fx";
+"Current %.3f" = "当前 %.3f";
+"Current %d" = "当前 %d";
+"0.20 s" = "0.20 秒";
+"1.00 s" = "1.00 秒";
+
+/* MARK: - Diagnostics actions */
+"Grant Accessibility Access" = "授予辅助功能权限";
+"Grant Input Monitoring Access" = "授予输入监控权限";
+"Restart Input Pipeline" = "重启输入管线";
+"Refresh Touch Connection" = "刷新触摸连接";
+"Reset Diagnostics" = "重置诊断";
+"Open Fullscreen Test Environment" = "打开全屏测试环境";
+
+/* MARK: - Test overlay */
+"Touches" = "触摸";
+"Close overlay with " = "关闭测试画面：按 ";
+"or by mouse-clicking here" = "或用鼠标点这里";
+
+/* MARK: - Floating keyboard (accessibility descriptions) */
+"Full-Size Keyboard" = "完整键盘";
+"Mini Keyboard" = "迷你键盘";
+"Hide Keyboard" = "隐藏键盘";
+"Switch Input Source" = "切换输入法";
+
+/* MARK: - Language */
+"Language" = "语言";
+"App Language" = "App 语言";
+"The language of TouchMyMac's menus and settings." = "TouchMyMac 菜单和设置使用的语言。";
+"System Default" = "跟随系统";
+"Restart TouchMyMac to use the new language." = "重新启动 TouchMyMac 后生效。";
+"Restart Now" = "立即重新启动";

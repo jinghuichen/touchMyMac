@@ -18,19 +18,19 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .general: return "General"
-        case .gestures: return "Gestures"
-        case .tuning: return "Tuning"
-        case .diagnostics: return "Diagnostics"
+        case .general: return L("General")
+        case .gestures: return L("Gestures")
+        case .tuning: return L("Tuning")
+        case .diagnostics: return L("Diagnostics")
         }
     }
 
     var subtitle: String {
         switch self {
-        case .general: return "Input and screen routing"
-        case .gestures: return "Gesture actions and mappings"
-        case .tuning: return "Thresholds and scrolling"
-        case .diagnostics: return "Debug and live status"
+        case .general: return L("Input and screen routing")
+        case .gestures: return L("Gesture actions and mappings")
+        case .tuning: return L("Thresholds and scrolling")
+        case .diagnostics: return L("Debug and live status")
         }
     }
 
@@ -72,6 +72,14 @@ struct SettingsView: View {
         }
     }
 
+    private var pinchZoomSpeedBinding: Binding<Double> {
+        Binding {
+            Double(model.pinchZoomSpeed)
+        } set: { value in
+            model.pinchZoomSpeed = CGFloat(value)
+        }
+    }
+
     private var inertiaAmountBinding: Binding<Double> {
         Binding {
             Double(model.scrollInertiaVelocityMultiplier)
@@ -101,6 +109,14 @@ struct SettingsView: View {
             Double(model.doubleClickDistance)
         } set: { value in
             model.doubleClickDistance = CGFloat(Int(value))
+        }
+    }
+
+    private var languageBinding: Binding<AppLanguage> {
+        Binding {
+            model.appLanguage
+        } set: { language in
+            model.setAppLanguage(language)
         }
     }
 
@@ -176,6 +192,8 @@ struct SettingsView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
             )
+            // A plain button only takes clicks on its drawn content; this makes the whole row hit-testable.
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -248,6 +266,32 @@ struct SettingsView: View {
                 .padding(.vertical, 8)
             }
 
+            SettingsGroup(title: "Language") {
+                VStack(alignment: .leading, spacing: 8) {
+                    SettingText(labels: (L("App Language"), L("The language of TouchMyMac's menus and settings.")))
+                    Picker("", selection: languageBinding) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.title).tag(language)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 320, alignment: .leading)
+
+                    if model.languageNeedsRestart {
+                        HStack(spacing: 10) {
+                            Text(L("Restart TouchMyMac to use the new language."))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button(L("Restart Now")) {
+                                model.relaunch()
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+
             SettingsGroup(title: "Startup") {
                 VStack(alignment: .leading, spacing: 0) {
                     settingToggleRow(labels: model.uiLabels(for: \.opensAtLogin), isOn: opensAtLoginBinding)
@@ -263,15 +307,15 @@ struct SettingsView: View {
             .onAppear { model.refreshOpensAtLogin() }
 
             SettingsGroup(title: "Status") {
-                settingValueRow("Accessibility", value: model.isAccessibilityAccessGranted ? "Granted" : "Missing")
+                settingValueRow("Accessibility", value: model.isAccessibilityAccessGranted ? L("Granted") : L("Missing"))
                 sectionDivider
                 settingValueRow("Input Monitoring", value: model.inputMonitoringStatusText)
                 sectionDivider
-                settingValueRow("Input Publishing", value: model.isPublishingMouseEventsEnabled ? "Enabled" : "Disabled")
+                settingValueRow("Input Publishing", value: model.isPublishingMouseEventsEnabled ? L("Enabled") : L("Disabled"))
                 sectionDivider
                 settingValueRow("Touchscreen", value: model.connectionState.displayName)
                 sectionDivider
-                settingValueRow("Assigned Screen", value: model.connectedTouchscreen?.name ?? "(Auto)")
+                settingValueRow("Assigned Screen", value: model.connectedTouchscreen?.name ?? L("(Auto)"))
             }
 
             SettingsGroup(title: "About") {
@@ -301,14 +345,14 @@ struct SettingsView: View {
                     labels: model.uiLabels(for: \.fiveFingerHoldShortcutSpec),
                     placeholder: "fn",
                     text: $model.fiveFingerHoldShortcutSpec,
-                    hint: "Example: fn or cmd+shift"
+                    hint: L("Example: fn or cmd+shift")
                 )
                 sectionDivider
                 shortcutFieldRow(
                     labels: model.uiLabels(for: \.fourFingerSwipeLeftSequenceSpec),
                     placeholder: "cmd+a, delete",
                     text: $model.fourFingerSwipeLeftSequenceSpec,
-                    hint: "Example: cmd+a, delete"
+                    hint: L("Example: cmd+a, delete")
                 )
             }
         }
@@ -320,11 +364,11 @@ struct SettingsView: View {
                 sliderRow(
                     labels: model.uiLabels(for: \.holdDuration),
                     value: $model.holdDuration,
-                    range: 0.0...0.16,
-                    step: 0.02,
-                    currentText: { String(format: "Current %.2f s", $0) },
-                    minText: "0.00 s",
-                    maxText: "0.16 s"
+                    range: 0.2...1.0,
+                    step: 0.05,
+                    currentText: { String(format: L("Current %.2f s"), $0) },
+                    minText: L("0.20 s"),
+                    maxText: L("1.00 s")
                 )
                 sectionDivider
                 sliderRow(
@@ -332,7 +376,7 @@ struct SettingsView: View {
                     value: doubleClickDistanceBinding,
                     range: 0...8,
                     step: 1,
-                    currentText: { "Current \(Int($0)) mm" },
+                    currentText: { String(format: L("Current %d mm"), Int($0)) },
                     minText: "0 mm",
                     maxText: "8 mm"
                 )
@@ -348,7 +392,7 @@ struct SettingsView: View {
                     value: scrollSpeedBinding,
                     range: 0.5...3.0,
                     step: 0.1,
-                    currentText: { String(format: "Current %.1fx", $0) },
+                    currentText: { String(format: L("Current %.1fx"), $0) },
                     minText: "0.5x",
                     maxText: "3.0x"
                 )
@@ -358,7 +402,7 @@ struct SettingsView: View {
                     value: inertiaAmountBinding,
                     range: 0.5...2.0,
                     step: 0.05,
-                    currentText: { String(format: "Current %.2fx", $0) },
+                    currentText: { String(format: L("Current %.2fx"), $0) },
                     minText: "0.5x",
                     maxText: "2.0x",
                     disabled: !model.isScrollInertiaEnabled
@@ -369,10 +413,24 @@ struct SettingsView: View {
                     value: inertiaDecayBinding,
                     range: 0.85...0.99,
                     step: 0.005,
-                    currentText: { String(format: "Current %.3f", $0) },
+                    currentText: { String(format: L("Current %.3f"), $0) },
                     minText: "0.850",
                     maxText: "0.990",
                     disabled: !model.isScrollInertiaEnabled
+                )
+            }
+
+            SettingsGroup(title: "Zoom") {
+                sliderRow(
+                    labels: model.uiLabels(for: \.pinchZoomSpeed),
+                    value: pinchZoomSpeedBinding,
+                    range: 1.0...3.0,
+                    step: 0.1,
+                    currentText: { String(format: L("Current %.1fx"), $0) },
+                    minText: "1.0x",
+                    maxText: "3.0x",
+                    disabled: !model.isMagnificationEnabled,
+                    disabledHint: "Turn on Magnification under Gestures to adjust this."
                 )
             }
 
@@ -382,7 +440,7 @@ struct SettingsView: View {
                     value: errorResistanceBinding,
                     range: 0...10,
                     step: 1,
-                    currentText: { "Current \(Int($0))" },
+                    currentText: { String(format: L("Current %d"), Int($0)) },
                     minText: "0",
                     maxText: "10"
                 )
@@ -450,17 +508,16 @@ struct SettingsView: View {
 
     private var accessBanner: some View {
         permissionBanner(
-            title: "Accessibility Access Required",
-            message: "TouchMyMac needs Accessibility access before macOS will accept the injected mouse and keyboard events.",
+            title: L("Accessibility Access Required"),
+            message: L("TouchMyMac needs Accessibility access before macOS will accept the injected mouse and keyboard events."),
             action: model.grantAccessibilityAccess
         )
     }
 
     private var inputMonitoringBanner: some View {
         permissionBanner(
-            title: "Input Monitoring Access Required",
-            message: "macOS won't let TouchMyMac read this touchscreen without Input Monitoring. "
-                + "Turn it on in System Settings → Privacy & Security → Input Monitoring.",
+            title: L("Input Monitoring Access Required"),
+            message: L("macOS won't let TouchMyMac read this touchscreen without Input Monitoring. Turn it on in System Settings → Privacy & Security → Input Monitoring."),
             action: model.grantInputMonitoringAccess
         )
     }
@@ -514,7 +571,8 @@ struct SettingsView: View {
         .padding(.vertical, 8)
     }
 
-    private func sliderRow(labels: (title: String, description: String), value: Binding<Double>, range: ClosedRange<Double>, step: Double, currentText: @escaping (Double) -> String, minText: String, maxText: String, disabled: Bool = false) -> some View {
+    private func sliderRow(labels: (title: String, description: String), value: Binding<Double>, range: ClosedRange<Double>, step: Double, currentText: @escaping (Double) -> String, minText: String, maxText: String, disabled: Bool = false,
+                           disabledHint: String = "Enable Scroll Inertia to adjust this.") -> some View {
         VStack(alignment: .leading, spacing: 10) {
             SettingText(labels: labels)
 
@@ -532,7 +590,7 @@ struct SettingsView: View {
             .foregroundStyle(.secondary)
 
             if disabled {
-                Text("Enable Scroll Inertia to adjust this.")
+                Text(L(disabledHint))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -543,7 +601,7 @@ struct SettingsView: View {
 
     private func settingValueRow(_ title: String, value: String) -> some View {
         HStack {
-            Text(title)
+            Text(L(title))
                 .font(.body)
             Spacer()
             Text(value)
@@ -554,7 +612,7 @@ struct SettingsView: View {
     }
 
     private func actionRow(title: String, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
+        Button(L(title), action: action)
             .buttonStyle(.plain)
             .foregroundStyle(Color.accentColor)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -629,7 +687,7 @@ private struct SettingsGroup<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title)
+            Text(L(title))
                 .font(.headline)
 
             VStack(alignment: .leading, spacing: 0) {

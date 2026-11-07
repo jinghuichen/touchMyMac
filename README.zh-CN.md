@@ -120,12 +120,13 @@ TouchMyMac 能把一块外接的 USB 触摸屏变成真正的 macOS 输入设备
 |---|---|---|
 | Open at Login | 关 | 登录时自动启动 TouchMyMac（需要 macOS 13 或更高版本） |
 | Drag Controls Directly | 开 | 滑块、滚动条、分割线和标题栏会直接跟着手指走；其他地方拖动仍是滚动 |
-| Hold Duration | 0.1 秒 | 停住多久之后再移动，会变成拖拽而不是滚动 |
+| Hold Duration | 0.4 秒 | 手指按住不动多久之后按下鼠标键，之后移动就是拖拽而不是滚动 |
 | Scroll Speed | 1.0 | 手指移动多少，内容就滚多少；1.0 表示内容紧贴手指 |
-| Hide Pointer While Scrolling | 开 | 滚动和惯性结束前隐藏指针 |
+| Hide Pointer While Scrolling | 开 | 手指滚动期间隐藏指针 |
 | Scroll Inertia | 开 | 甩动后继续滚动 |
 | Decay Speed | 0.92 | 惯性减速的快慢（越大滑得越久） |
 | Inertia Amount | 1.0 | 惯性能滑多远 |
+| Pinch Zoom Speed | 1.5 | 捏合缩放的倍率，1.0 时严格跟着手指 |
 | Double Click Zone | 8 毫米 | 两次轻点相距多近才算双击 |
 | Error Resistance | 4 | 对容易丢失触点的屏幕，等多少个报告再判定手指离开 |
 | Ignore Origin Touches | 开 | 忽略部分屏幕会发出的 (0, 0) 假触点 |
@@ -202,6 +203,12 @@ TouchMyMac 通过 macOS 的辅助功能来判断手指下面是什么。有些 A
 <summary><b>输入跳动，或者触点卡住不放</b></summary>
 
 把 Error Resistance 调大，并保持 Ignore Origin Touches 打开。Diagnostics 页面会实时显示触摸数量和识别到的手势，方便定位问题。
+</details>
+
+<details>
+<summary><b>怎么在中文和英文界面之间切换？</b></summary>
+
+在 **设置 → 通用 → 语言** 里选择，然后点“立即重新启动”。默认的“跟随系统”会跟随系统语言：在 系统设置 → 通用 → 语言与地区 里简体中文排在最前面时显示中文，否则显示英文。
 </details>
 
 ## 🛠 从源码构建
