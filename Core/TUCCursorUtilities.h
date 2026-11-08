@@ -73,6 +73,16 @@ NS_ASSUME_NONNULL_BEGIN
 /// Moves to the space on the right (YES) or left (NO), like Control-Right or Control-Left Arrow.
 - (void)switchSpaceToRight:(BOOL)toRight;
 
+/// Whether spaces can follow the fingers like a trackpad swipe (needs private macOS functions).
+@property (readonly) BOOL canSwipeSpacesContinuously;
+/// A trackpad-like swipe between spaces: the spaces follow `progress` (1 = one whole space; positive
+/// moves towards the space on the left, as fingers moving right do) and bounce back at the ends.
+- (void)beginSpaceSwipe;
+- (void)updateSpaceSwipeProgress:(CGFloat)progress;
+/// Lets go: macOS finishes the switch, or springs back if `cancelled`. `velocity` (progress per
+/// second) paces the animation.
+- (void)endSpaceSwipeWithVelocity:(CGFloat)velocity cancelled:(BOOL)cancelled;
+
 
 @end
 

@@ -80,6 +80,11 @@ typedef NS_ENUM(NSInteger, TUCControlUnderTouch) {
 @property NSInteger debugThreeFingerUpwardTouchCount;
 @property CGFloat debugThreeFingerVerticalTravelMM;
 @property CGFloat debugThreeFingerHorizontalTravelMM;
+// A three-finger swipe between spaces that the spaces follow, like on a trackpad.
+@property BOOL spaceSwipeActive;
+@property CGFloat spaceSwipeProgress;
+@property CGFloat spaceSwipeVelocity; // progress per second, smoothed
+@property (strong) NSDate *spaceSwipeLastMoveDate;
 
 @property (strong) NSTimer *touchInactivityTimer;
 
@@ -128,6 +133,10 @@ static const NSTimeInterval kTouchInactivityTimeoutWithLiftoffs = 1.0;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxHorizontalTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxVerticalTravelMM = 18.0f;
+static const NSTimeInterval kSpaceSwipeStillAfter = 0.1; // fingers that stopped this long before lifting let go at rest
+static const CGFloat kSpaceSwipeCommitProgress = 0.5; // dragged this far (screen widths), lifting switches
+static const CGFloat kSpaceSwipeFlingVelocity = 0.5; // a flick this fast (screen widths per second) switches too
+static const CGFloat kSpaceSwipeFlingMinProgress = 0.04; // but only after the spaces visibly moved
 static const CGFloat kFourFingerSwipeTriggerTravelMM = 20.0f;
 static const CGFloat kFourFingerSwipeMaxCrossTravelMM = 18.0f;
 static const NSInteger kStableTouchCountReports = 3; // a finger count must last this long to count for a gesture
@@ -1519,6 +1528,7 @@ static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReac
 }
 
 - (void)resetMultiFingerSession {
+    [self endSpaceSwipe];
     [self resetFiveFingerHoldTracking];
     self.gestureFingerCount = 0;
     self.lastReportTouchCount = 0;
@@ -1573,6 +1583,15 @@ static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReac
         self.debugThreeFingerHorizontalTravelMM = fabs(rightMM);
     }
 
+    if (self.spaceSwipeActive) {
+        if (touches.count == 3) {
+            [self updateSpaceSwipeWithTravelMM:rightMM];
+        } else {
+            [self endSpaceSwipe]; // a finger lifted: the swipe is over
+        }
+        return YES;
+    }
+
     if (self.multiFingerGestureTriggered) {
         return YES;
     }
@@ -1607,9 +1626,70 @@ static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReac
             // The swipe toggles Mission Control, so a second one closes it.
             self.missionControlMayBeOpen = !self.missionControlMayBeOpen;
         }
+        BOOL sideways = gesture == TUCCursorGestureThreeFingerSwipeLeft || gesture == TUCCursorGestureThreeFingerSwipeRight;
+        if (sideways && [TUCCursorUtilities sharedInstance].canSwipeSpacesContinuously) {
+            [self beginSpaceSwipeWithTravelMM:rightMM];
+            return YES;
+        }
         [self performMouseEventForGesture:gesture];
     }
     return YES;
+}
+
+#pragma mark - Space Swipes
+
+/**
+ Three fingers moving sideways move the spaces along with them, like on a trackpad: macOS shows the
+ neighbouring space sliding in and springs back at the first or last space. On liftoff the switch
+ finishes or springs back depending on how far and how fast the fingers went.
+ */
+- (void)beginSpaceSwipeWithTravelMM:(CGFloat)travelMM {
+    self.missionControlMayBeOpen = NO;
+    self.spaceSwipeActive = YES;
+    self.spaceSwipeProgress = 0;
+    self.spaceSwipeVelocity = 0;
+    self.spaceSwipeLastMoveDate = [NSDate date];
+    [[TUCCursorUtilities sharedInstance] beginSpaceSwipe];
+    [self updateSpaceSwipeWithTravelMM:travelMM];
+}
+
+/// `travelMM` is how far the fingers moved right since they landed (negative: left). The spaces move
+/// with the fingers, one screen width per screen width, and at most to the next space.
+- (void)updateSpaceSwipeWithTravelMM:(CGFloat)travelMM {
+    CGFloat widthMM = [self touchscreen].physicalSize.width;
+    CGFloat progress = widthMM > 0 ? MAX(-1, MIN(1, travelMM / widthMM)) : 0;
+    NSDate *now = [NSDate date];
+    NSTimeInterval elapsed = [now timeIntervalSinceDate:self.spaceSwipeLastMoveDate];
+    if (progress == self.spaceSwipeProgress) {
+        return;
+    }
+    if (elapsed > 0.001) {
+        CGFloat velocity = (progress - self.spaceSwipeProgress) / elapsed;
+        self.spaceSwipeVelocity = 0.6 * velocity + 0.4 * self.spaceSwipeVelocity;
+    }
+    self.spaceSwipeProgress = progress;
+    self.spaceSwipeLastMoveDate = now;
+    [[TUCCursorUtilities sharedInstance] updateSpaceSwipeProgress:progress];
+}
+
+- (void)endSpaceSwipe {
+    if (!self.spaceSwipeActive) {
+        return;
+    }
+    self.spaceSwipeActive = NO;
+    CGFloat velocity = self.spaceSwipeVelocity;
+    if ([[NSDate date] timeIntervalSinceDate:self.spaceSwipeLastMoveDate] > kSpaceSwipeStillAfter) {
+        velocity = 0; // the fingers had stopped before they lifted
+    }
+    // macOS switches whenever the swipe ends and springs back when it's cancelled, so the decision is
+    // made here, as a trackpad does: switch once dragged past halfway or flicked onwards, unless the
+    // fingers were flicking back.
+    CGFloat progress = self.spaceSwipeProgress;
+    CGFloat onwardSpeed = progress >= 0 ? velocity : -velocity;
+    BOOL flickedOnward = onwardSpeed >= kSpaceSwipeFlingVelocity && fabs(progress) >= kSpaceSwipeFlingMinProgress;
+    BOOL flickedBack = onwardSpeed <= -kSpaceSwipeFlingVelocity;
+    BOOL switches = !flickedBack && (flickedOnward || fabs(progress) >= kSpaceSwipeCommitProgress);
+    [[TUCCursorUtilities sharedInstance] endSpaceSwipeWithVelocity:velocity cancelled:!switches];
 }
 
 - (void)processFiveFingerHoldWithTouches:(NSArray<TUCTouch *> *)touches {

@@ -10,11 +10,13 @@
 #import <QuartzCore/QuartzCore.h>
 #import <unistd.h>
 #import <dlfcn.h>
+#import <mach/mach_time.h>
 
 #define kScrollSampleCapacity 32
 
 @interface TUCCursorUtilities ()
 
+@property CGFloat spaceSwipeProgress; // the last progress sent in a space swipe
 @property NSInteger cursorClickCount;
 @property NSDate *timeOfLastClick;
 @property CGPoint locationOfLastClick;
@@ -1268,6 +1270,122 @@ static const CFTimeInterval kPinchSmoothingTime = 0.012;
     CFRelease(upDown);
     CFRelease(upUp);
     CFRelease(controlUp);
+}
+
+#pragma mark - Space Swipes
+
+/*
+ A trackpad drives space switching with a stream of dock swipe events that carry the swipe's
+ progress, which is how the spaces follow the fingers and bounce at the ends. Since macOS 27 the
+ dock only reads them from the IOHIDEvent attached to the CGEvent, so one is made with IOKit's
+ IOHIDEvent functions and attached with SkyLight's SLEventSetIOHIDEvent. All of these are private
+ and looked up at run time; without them spaces switch with the keyboard shortcut instead.
+ */
+typedef struct __IOHIDEvent *TUCIOHIDEventRef;
+typedef TUCIOHIDEventRef (*TUCIOHIDEventCreateFn)(CFAllocatorRef, uint32_t type, uint64_t timestamp, uint32_t options);
+typedef void (*TUCIOHIDEventSetIntegerFn)(TUCIOHIDEventRef, uint32_t field, CFIndex value);
+typedef void (*TUCIOHIDEventSetDoubleFn)(TUCIOHIDEventRef, uint32_t field, double value);
+typedef void (*TUCIOHIDEventSetPhaseFn)(TUCIOHIDEventRef, uint16_t phase);
+typedef void (*TUCIOHIDEventAppendFn)(TUCIOHIDEventRef, TUCIOHIDEventRef, uint32_t options);
+typedef void (*TUCEventSetIOHIDEventFn)(CGEventRef, TUCIOHIDEventRef);
+
+static TUCIOHIDEventCreateFn TUCIOHIDEventCreate;
+static TUCIOHIDEventSetIntegerFn TUCIOHIDEventSetIntegerValue;
+static TUCIOHIDEventSetDoubleFn TUCIOHIDEventSetDoubleValue;
+static TUCIOHIDEventSetPhaseFn TUCIOHIDEventSetPhase;
+static TUCIOHIDEventAppendFn TUCIOHIDEventAppendEvent;
+static TUCEventSetIOHIDEventFn TUCEventSetIOHIDEvent;
+
+static const uint32_t kTUCHIDEventTypeVelocity = 9;
+static const uint32_t kTUCHIDEventTypeDockSwipe = 23;
+static const uint32_t kTUCDockSwipeFieldMotion = (23 << 16) | 1;
+static const uint32_t kTUCDockSwipeFieldProgress = (23 << 16) | 2;
+static const uint32_t kTUCDockSwipeFieldFlavor = (23 << 16) | 5;
+static const uint32_t kTUCVelocityFieldX = (9 << 16) | 0;
+static const uint32_t kTUCVelocityFieldY = (9 << 16) | 1;
+static const CFIndex kTUCGestureMotionHorizontal = 1;
+static const CFIndex kTUCGestureFlavorDockPrimary = 3;
+static const uint16_t kTUCGesturePhaseBegan = 1, kTUCGesturePhaseChanged = 2, kTUCGesturePhaseEnded = 4, kTUCGesturePhaseCancelled = 8;
+static const CGEventType kTUCEventTypeDockControl = 30;
+
+static BOOL TUCLoadSpaceSwipeFunctions(void) {
+    static BOOL loaded = NO;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+        void *skylight = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY);
+        if (iokit == NULL || skylight == NULL) {
+            return;
+        }
+        TUCIOHIDEventCreate = (TUCIOHIDEventCreateFn)dlsym(iokit, "IOHIDEventCreate");
+        TUCIOHIDEventSetIntegerValue = (TUCIOHIDEventSetIntegerFn)dlsym(iokit, "IOHIDEventSetIntegerValue");
+        TUCIOHIDEventSetDoubleValue = (TUCIOHIDEventSetDoubleFn)dlsym(iokit, "IOHIDEventSetDoubleValue");
+        TUCIOHIDEventSetPhase = (TUCIOHIDEventSetPhaseFn)dlsym(iokit, "IOHIDEventSetPhase");
+        TUCIOHIDEventAppendEvent = (TUCIOHIDEventAppendFn)dlsym(iokit, "IOHIDEventAppendEvent");
+        TUCEventSetIOHIDEvent = (TUCEventSetIOHIDEventFn)dlsym(skylight, "SLEventSetIOHIDEvent");
+        loaded = TUCIOHIDEventCreate && TUCIOHIDEventSetIntegerValue && TUCIOHIDEventSetDoubleValue
+            && TUCIOHIDEventSetPhase && TUCIOHIDEventAppendEvent && TUCEventSetIOHIDEvent;
+    });
+    return loaded;
+}
+
+static void TUCPostDockSwipe(uint16_t phase, double progress, double velocity) {
+    TUCIOHIDEventRef swipe = TUCIOHIDEventCreate(kCFAllocatorDefault, kTUCHIDEventTypeDockSwipe, mach_absolute_time(), 0);
+    if (swipe == NULL) {
+        return;
+    }
+    TUCIOHIDEventSetPhase(swipe, phase);
+    TUCIOHIDEventSetIntegerValue(swipe, kTUCDockSwipeFieldMotion, kTUCGestureMotionHorizontal);
+    TUCIOHIDEventSetIntegerValue(swipe, kTUCDockSwipeFieldFlavor, kTUCGestureFlavorDockPrimary);
+    TUCIOHIDEventSetDoubleValue(swipe, kTUCDockSwipeFieldProgress, progress);
+    if (phase == kTUCGesturePhaseEnded || phase == kTUCGesturePhaseCancelled) {
+        // The release speed decides whether the switch finishes or springs back.
+        TUCIOHIDEventRef speed = TUCIOHIDEventCreate(kCFAllocatorDefault, kTUCHIDEventTypeVelocity, mach_absolute_time(), 0);
+        if (speed != NULL) {
+            TUCIOHIDEventSetDoubleValue(speed, kTUCVelocityFieldX, velocity);
+            TUCIOHIDEventSetDoubleValue(speed, kTUCVelocityFieldY, velocity);
+            TUCIOHIDEventAppendEvent(swipe, speed, 0);
+            CFRelease(speed);
+        }
+    }
+    CGEventRef event = CGEventCreate(NULL);
+    if (event != NULL) {
+        CGEventSetType(event, kTUCEventTypeDockControl);
+        TUCEventSetIOHIDEvent(event, swipe);
+        CGEventPost(kCGSessionEventTap, event);
+        CFRelease(event);
+    }
+    CFRelease(swipe);
+}
+
+- (BOOL)canSwipeSpacesContinuously {
+    return TUCLoadSpaceSwipeFunctions();
+}
+
+- (void)beginSpaceSwipe {
+    if (!TUCLoadSpaceSwipeFunctions()) {
+        return;
+    }
+    [self cancelMomentumScroll];
+    [self stopDraggingCursor];
+    [self stopMagnifying];
+    self.spaceSwipeProgress = 0;
+    TUCPostDockSwipe(kTUCGesturePhaseBegan, 0, 0);
+}
+
+- (void)updateSpaceSwipeProgress:(CGFloat)progress {
+    if (!TUCLoadSpaceSwipeFunctions() || progress == self.spaceSwipeProgress) {
+        return;
+    }
+    self.spaceSwipeProgress = progress;
+    TUCPostDockSwipe(kTUCGesturePhaseChanged, progress, 0);
+}
+
+- (void)endSpaceSwipeWithVelocity:(CGFloat)velocity cancelled:(BOOL)cancelled {
+    if (!TUCLoadSpaceSwipeFunctions()) {
+        return;
+    }
+    TUCPostDockSwipe(cancelled ? kTUCGesturePhaseCancelled : kTUCGesturePhaseEnded, self.spaceSwipeProgress, velocity);
 }
 
 - (void)switchSpaceToRight:(BOOL)toRight {
