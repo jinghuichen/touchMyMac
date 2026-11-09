@@ -133,9 +133,10 @@ static const NSTimeInterval kTouchInactivityTimeoutWithLiftoffs = 1.0;
 static const CGFloat kThreeFingerSwipeTriggerTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxHorizontalTravelMM = 18.0f;
 static const CGFloat kThreeFingerSwipeMaxVerticalTravelMM = 18.0f;
-static const NSTimeInterval kSpaceSwipeStillAfter = 0.1; // fingers that stopped this long before lifting let go at rest
-static const CGFloat kSpaceSwipeCommitProgress = 0.5; // dragged this far (screen widths), lifting switches
-static const CGFloat kSpaceSwipeFlingVelocity = 0.5; // a flick this fast (screen widths per second) switches too
+static const NSTimeInterval kSpaceSwipeStillAfter = 0.15; // fingers that stopped this long before lifting let go at rest
+static const CGFloat kSpaceSwipeCommitProgress = 0.25; // dragged this far (screen widths), lifting switches
+static const CGFloat kSpaceSwipeFlingVelocity = 0.3; // a flick this fast (screen widths per second) switches too
+static const CGFloat kSpaceSwipeFlingBackVelocity = 0.5; // a flick back this fast springs back however far it went
 static const CGFloat kSpaceSwipeFlingMinProgress = 0.04; // but only after the spaces visibly moved
 static const CGFloat kFourFingerSwipeTriggerTravelMM = 20.0f;
 static const CGFloat kFourFingerSwipeMaxCrossTravelMM = 18.0f;
@@ -1682,12 +1683,12 @@ static BOOL TUCDraggableControlAtLocation(CGPoint location, CGFloat splitterReac
         velocity = 0; // the fingers had stopped before they lifted
     }
     // macOS switches whenever the swipe ends and springs back when it's cancelled, so the decision is
-    // made here, as a trackpad does: switch once dragged past halfway or flicked onwards, unless the
+    // made here, as a trackpad does: switch once dragged a quarter of the way or flicked onwards, unless the
     // fingers were flicking back.
     CGFloat progress = self.spaceSwipeProgress;
     CGFloat onwardSpeed = progress >= 0 ? velocity : -velocity;
     BOOL flickedOnward = onwardSpeed >= kSpaceSwipeFlingVelocity && fabs(progress) >= kSpaceSwipeFlingMinProgress;
-    BOOL flickedBack = onwardSpeed <= -kSpaceSwipeFlingVelocity;
+    BOOL flickedBack = onwardSpeed <= -kSpaceSwipeFlingBackVelocity;
     BOOL switches = !flickedBack && (flickedOnward || fabs(progress) >= kSpaceSwipeCommitProgress);
     [[TUCCursorUtilities sharedInstance] endSpaceSwipeWithVelocity:velocity cancelled:!switches];
 }
