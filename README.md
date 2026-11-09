@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="TouchMyMac/Assets.xcassets/AppIcon.appiconset/icon.png" width="128" alt="TouchMyMac icon">
+<img src="TouchMyMac/Assets.xcassets/AppIcon.appiconset/icon_512x512@2x.png" width="128" alt="TouchMyMac icon">
 
 # TouchMyMac
 
